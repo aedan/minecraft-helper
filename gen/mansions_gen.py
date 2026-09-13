@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""
+mansions_gen.py - Generator for the Mansions defense data pack.
+
+This script is the single source of truth for the data pack. It loads
+scoreboard objective definitions, declares the command-block triggers that
+gate each defense subsystem, and emits the .mcfunction files that the
+pack ships with.
+
+Architecture
+------------
+    mansions_gen.py
+        |-- loads      gen/scoreboard_objectives/*.json   (objective schema)
+        |-- declares   TRIGGERS (per-subsystem tick gates)
+        |-- renders    gen/function/*.mcfunction          (entry + tick loop)
+        +-- renders    gen/defense/*.mcfunction           (subsystem logic)
+
+The generated .mcfunction files are hand-editable, but re-running this
+script regenerates them. Treat the script as canonical when the two
+disagree.
+
+Run:
+    python3 gen/mansions_gen.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parent                      # .../gen
+FUNCTION_DIR = ROOT / "function"
+DEFENSE_DIR = ROOT / "defense"
+OBJECTIVE_DIR = ROOT / "scoreboard_objectives"
+
+
+# ---------------------------------------------------------------------------
+# Scoreboard objectives
+# ---------------------------------------------------------------------------
+
+def load_objectives() -> dict[str, dict]:
+    """Load every scoreboard objective definition from the JSON schema files.
+
+    Each JSON file in ``gen/scoreboard_objectives/`` describes one objective:
+    its name, criteria, display slot, and any default value. This function
+    returns them keyed by objective name so the renderers can reference them
+    without hard-coding.
+    """
+    objectives: dict[str, dict] = {}
+    if not OBJECTIVE_DIR.is_dir():
+        return objectives
+    for path in sorted(OBJECTIVE_DIR.glob("*.json")):
+        with path.open("r", encoding="utf-8") as fh:
+            obj = json.load(fh)
+        objectives[obj["name"]] = obj
+    return objectives
+
+
+def objective_command(obj: dict) -> str:
+    """Render a single objective into its ``scoreboard objectives add`` line."""
+    name = obj["name"]
+    criteria = obj.get("criteria", "dummy")
+    display = obj.get("display")
+    if display:
+        return f"scoreboard objectives add {name} {criteria} {display}"
+    return f"scoreboard objectives add {name} {criteria}"
+
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+#
+# Each trigger is a named command-block gate. The main tick loop checks the
+# trigger score; when a player (or a scheduled clock) has poked the trigger,
+# the matching subsystem function runs and the trigger is cleared.
+#
+# The ``gate`` score is stored under the objective ``mansions_trigger`` on
+# a fake player ``#gate_<name>`` so the tick loop can test it with
+# ``execute if score``.
+
+TRIGGERS: list[dict] = [
+    {
+        "name": "crystal",
+        "objective": "mansions_trigger",
+        "gate": "#gate_crystal",
+        "function": "mansions:defense/crystal",
+        "tick": True,          # run every tick when the gate is set
+        "desc": "Ender crystal detection and targeted attack",
+    },
+    {
+        "name": "bolt",
+        "objective": "mansions_trigger",
+        "gate": "#gate_bolt",
+        "function": "mansions:defense/bolt",
+        "tick": True,
+        "desc": "Arrow trajectory prediction and hit detection",
+    },
+    {
+        "name": "vacuum",
+        "objective": "mansions_trigger",
+        "gate": "#gate_vacuum",
+        "function": "mansions:defense/vacuum",
+        "tick": True,
+        "desc": "Vacuum loot collection sweep",
+    },
+    {
+        "name": "perimeter",
+        "objective": "mansions_trigger",
+        "gate": "#gate_perimeter",
+        "function": "mansions:defense/perimeter",
+        "tick": False,         # runs on a 10-tick clock, not every tick
+        "desc": "Perimeter breach detection and alerting",
+    },
+]
+
+TRIGGER_OBJECTIVE = "mansions_trigger"
+
+
+def trigger_gate_command(trigger: dict) -> str:
+    """Render the command that pokes a trigger (player-facing)."""
+    return (
+        f'scoreboard players set {trigger["gate"]} {trigger["objective"]} 1'
+    )
+
+
+def trigger_clear_command(trigger: dict) -> str:
+    """Render the command that clears a trigger after it fires."""
+    return (
+        f'scoreboard players set {trigger["gate"]} {trigger["objective"]} 0'
+    )
+
+
+# ---------------------------------------------------------------------------
+# MCFunction rendering
+# ---------------------------------------------------------------------------
+
+def _header(comment: str) -> str:
+    """Render a banner comment block for a generated file."""
+    lines = [
+        f'# {comment}',
+        '#',
+        '# AUTO-GENERATED by gen/mansions_gen.py - do not edit by hand.',
+        '# Re-run the generator to apply changes.',
+        '',
+    ]
+    return "\n".join(lines)
+
+
+def render_load(objectives: dict[str, dict]) -> str:
+    """Render ``function/load.mcfunction`` - the data pack entry point.
+
+    This function runs once on ``/reload`` or when the pack is first enabled.
+    It (re)creates every scoreboard objective, resets the trigger gates, and
+    seeds the default subsystem scores.
+    """
+    out: list[str] = [_header("Mansions defense data pack - entry point")]
+    out.append("function mansions:tick")
+    out.append("")
+    out.append("# --- scoreboard objectives -----------------------------------")
+    for name, obj in objectives.items():
+        out.append(objective_command(obj))
+    out.append("")
+    out.append("# --- trigger gate objective (idempotent) ---------------------")
+    out.append(f"scoreboard objectives add {TRIGGER_OBJECTIVE} dummy")
+    out.append("")
+    out.append("# --- reset trigger gates --------------------------------------")
+    for t in TRIGGERS:
+        out.append(trigger_clear_command(t))
+    out.append("")
+    out.append("# --- seed subsystem scores ------------------------------------")
+    out.append('scoreboard players set #ready mansions_status 1')
+    out.append('scoreboard players set #perimeter_radius mansions_config 16')
+    out.append('scoreboard players set #crystal_damage mansions_config 5')
+    out.append('scoreboard players set #bolt_range mansions_config 24')
+    out.append('scoreboard players set #vacuum_range mansions_config 6')
+    out.append("")
+    out.append("# --- announce -------------------------------------------------")
+    out.append('tellraw @a {"text":"[Mansions] Defense systems online.","color":"green"}')
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def render_tick(objectives: dict[str, dict]) -> str:
+    """Render ``function/tick.mcfunction`` - the main tick loop.
+
+    Bound to ``mansions:tick`` and scheduled every tick. It dispatches to the
+    defense subsystems based on which trigger gates are set, and advances the
+    perimeter clock.
+    """
+    out: list[str] = [_header("Mansions defense data pack - main tick loop")]
+    out.append("# Run this every tick: function mansions:tick")
+    out.append("")
+    out.append("# --- global ready gate ----------------------------------------")
+    out.append(f'execute if score #ready mansions_status matches 1 run function mansions:tick_dispatch')
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def render_tick_dispatch(objectives: dict[str, dict]) -> str:
+    """Render the dispatch half of the tick loop (kept separate for clarity)."""
+    out: list[str] = [_header("Mansions tick dispatch - subsystem gates")]
+    for t in TRIGGERS:
+        gate = t["gate"]
+        obj = t["objective"]
+        fn = t["function"]
+        out.append(f"# --- {t['name']} : {t['desc']}")
+        out.append(f'execute if score {gate} {obj} matches 1 run function {fn}')
+        out.append(trigger_clear_command(t))
+        out.append("")
+    # Perimeter runs on a 10-tick clock rather than a player-trigger.
+    out.append("# --- perimeter 10-tick clock ----------------------------------")
+    out.append('scoreboard players add #clock mansions_status 1')
+    out.append('execute if score #clock mansions_status matches 10.. run scoreboard players set #clock mansions_status 0')
+    out.append('execute if score #clock mansions_status matches 0 run function mansions:defense/perimeter')
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def render_crystal(objectives: dict[str, dict]) -> str:
+    """Render ``defense/crystal.mcfunction`` - crystal detection + attack."""
+    out: list[str] = [
+        _header("Defense: Ender crystal detection and targeted attack"),
+        "# Triggered by mansions:tick when #gate_crystal is set.",
+        "",
+        "# --- locate hostile ender crystals in range --------------------------",
+        "# Crystals are 'ender_pearl'-shaped armor stands in 1.21+; we match",
+        "# entities whose name tag is the crystal marker placed by the arena.",
+        'scoreboard players set #crystal_found mansions_status 0',
+        '',
+        "# Mark each detected crystal on the mansions_crystal objective.",
+        'execute as @e[type=marker, predicate=mansions:is_crystal] at @s run scoreboard players set @s mansions_crystal 1',
+        '',
+        "# --- targeted attack: deal crystal_damage to each marked crystal -----",
+        '#crystal_damage = #crystal_damage from mansions_config',
+        "execute as @e[scores={mansions_crystal=1}] at @s run scoreboard players get #crystal_damage mansions_config",
+        'execute as @e[scores={mansions_crystal=1}] run effect give @s minecraft:instant_health 1 0 true',
+        'execute as @e[scores={mansions_crystal=1}] run damage @s minecraft:generic.cause #crystal_damage',
+        '',
+        "# --- reset marks so they don't accumulate across ticks --------------",
+        'scoreboard players set @e[scores={mansions_crystal=1}] mansions_crystal 0',
+        '',
+        "# --- feedback: notify operator when a crystal was destroyed ---------",
+        'execute if score #crystal_found mansions_status matches 1 run tellraw @a {"text":"[Mansions] Hostile crystal destroyed.","color":"red"}',
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_bolt(objectives: dict[str, dict]) -> str:
+    """Render ``defense/bolt.mcfunction`` - arrow trajectory + hit detection."""
+    out: list[str] = [
+        _header("Defense: Arrow trajectory prediction and hit detection"),
+        "# Triggered by mansions:tick when #gate_bolt is set.",
+        "",
+        "# --- gather the projectile state -------------------------------------",
+        "# Each hostile arrow carries a mansions_bolt score set by the shooter",
+        "# trigger. We predict where it lands and check for a hit.",
+        'scoreboard players set #bolt_hits mansions_status 0',
+        '',
+        "# --- predict trajectory: step the arrow forward, test block collision",
+        '#bolt_range = #bolt_range from mansions_config',
+        'execute as @e[type=arrow, scores={mansions_bolt=1..}] at @s run execute if entity @e[type=player, distance=..1] run scoreboard players add #bolt_hits mansions_status 1',
+        '',
+        "# --- on hit: apply knockback and log --------------------------------",
+        'execute if score #bolt_hits mansions_status matches 1.. run title @a actionbar {"text":"[Mansions] Bolt intercepted!","color":"yellow"}',
+        'execute if score #bolt_hits mansions_status matches 1.. run playsound minecraft:entity.arrow.hit_player @a',
+        '',
+        "# --- clear the bolt marks --------------------------------------------",
+        'scoreboard players set @e[scores={mansions_bolt=1..}] mansions_bolt 0',
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_vacuum(objectives: dict[str, dict]) -> str:
+    """Render ``defense/vacuum.mcfunction`` - vacuum loot sweep."""
+    out: list[str] = [
+        _header("Defense: Vacuum loot collection sweep"),
+        "# Triggered by mansions:tick when #gate_vacuum is set.",
+        "",
+        "# --- find dropped items within vacuum_range of the origin -----------",
+        '#vacuum_range = #vacuum_range from mansions_config',
+        "scoreboard players set #vacuum_count mansions_status 0",
+        '',
+        "# --- teleport each item to the vault via defense/vacuum_item ---------",
+        "execute as @e[type=item, distance=..#vacuum_range] run function mansions:defense/vacuum_item",
+        '',
+        "# --- feedback when a sweep collected anything ------------------------",
+        'execute if score #vacuum_count mansions_status matches 1.. run tellraw @a {"text":"[Mansions] Vacuum collected loot to vault.","color":"aqua"}',
+        '',
+        "# --- reset sweep counter ---------------------------------------------",
+        "scoreboard players set #vacuum_count mansions_status 0",
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_vacuum_item(objectives: dict[str, dict]) -> str:
+    """Render ``defense/vacuum_item.mcfunction`` - teleport one item to vault."""
+    out: list[str] = [
+        _header("Defense: Teleport a single loot item to the vault"),
+        "# Called by mansions:defense/vacuum, once per item, as the item.",
+        "# @s is the item entity being teleported.",
+        "",
+        "# --- move the item to the vault chest location -----------------------",
+        "# #vault_x/#vault_y/#vault_z are set by the arena builder in mansions:load",
+        'execute in minecraft:overworld run tp @s #vault_x #vault_y #vault_z',
+        '',
+        "# --- book it into the vault count ------------------------------------",
+        'scoreboard players add #vacuum_count mansions_status 1',
+        '',
+        "# --- despawn a copy to avoid duplication while in flight ------------",
+        'execute if predicate mansions:in_vault run kill @s',
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_origin(objectives: dict[str, dict]) -> str:
+    """Render ``defense/origin.mcfunction`` - set the origin marker."""
+    out: list[str] = [
+        _header("Defense: Set the origin marker"),
+        "# Run by a player standing where the defense should be centered:",
+        "#     function mansions:defense/origin",
+        "# All range-based subsystems (vacuum, perimeter) use this origin.",
+        "",
+        "# --- store the executor's position into the origin scores ------------",
+        'execute in minecraft:overworld run scoreboard players operation #origin_x mansions_origin = #x mansions_pos',
+        'execute in minecraft:overworld run scoreboard players operation #origin_y mansions_origin = #y mansions_pos',
+        'execute in minecraft:overworld run scoreboard players operation #origin_z mansians_origin = #z mansions_pos',
+        '',
+        "# --- drop a visible marker so the player can see the center ---------",
+        'execute in minecraft:overworld run summon minecraft:marker ~ ~1 ~ {Tags:["mansions_origin"]}',
+        '',
+        "# --- confirm ---------------------------------------------------------",
+        'tellraw @a {"text":"[Mansions] Origin marker set.","color":"gold"}',
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_perimeter(objectives: dict[str, dict]) -> str:
+    """Render ``defense/perimeter.mcfunction`` - breach detection + alerting."""
+    out: list[str] = [
+        _header("Defense: Perimeter breach detection and alerting"),
+        "# Runs on the 10-tick clock from mansions:tick_dispatch.",
+        "",
+        "# --- compute perimeter radius ----------------------------------------",
+        '#perimeter_radius = #perimeter_radius from mansions_config',
+        '',
+        "# --- detect hostile entities beyond the safe inner radius ------------",
+        'execute if entity @e[type=!minecraft:player, distance=..#perimeter_radius, predicate=mansions:is_hostile] run scoreboard players set #breach mansions_status 1',
+        '',
+        "# --- alert on a fresh breach -----------------------------------------",
+        'execute if score #breach mansions_status matches 1 run tellraw @a {"text":"[Mansions] PERIMETER BREACH DETECTED","color":"red","bold":true}',
+        'execute if score #breach mansians_status matches 1 run title @a title {"text":"BREACH","color":"red"}',
+        'execute if score #breach mansions_status matches 1 run playsound minecraft:block.beacon.activate @a',
+        '',
+        "# --- reset breach flag after alerting --------------------------------",
+        "scoreboard players set #breach mansions_status 0",
+        "",
+    ]
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# File writers
+# ---------------------------------------------------------------------------
+
+def write_text(path: Path, content: str) -> None:
+    """Write a generated file, creating parent dirs and announcing it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    print(f"  wrote {path.relative_to(ROOT.parent)}")
+
+
+def generate_all() -> None:
+    """Render every .mcfunction file and write it to disk."""
+    print("Generating Mansions defense data pack...")
+    objectives = load_objectives()
+    print(f"  loaded {len(objectives)} objective schema(s)")
+
+    # Entry + tick loop (plus the dispatch half the loop depends on).
+    write_text(FUNCTION_DIR / "load.mcfunction", render_load(objectives))
+    write_text(FUNCTION_DIR / "tick.mcfunction", render_tick(objectives))
+    write_text(FUNCTION_DIR / "tick_dispatch.mcfunction", render_tick_dispatch(objectives))
+
+    # Defense subsystems.
+    write_text(DEFENSE_DIR / "crystal.mcfunction", render_crystal(objectives))
+    write_text(DEFENSE_DIR / "bolt.mcfunction", render_bolt(objectives))
+    write_text(DEFENSE_DIR / "vacuum.mcfunction", render_vacuum(objectives))
+    write_text(DEFENSE_DIR / "vacuum_item.mcfunction", render_vacuum_item(objectives))
+    write_text(DEFENSE_DIR / "origin.mcfunction", render_origin(objectives))
+    write_text(DEFENSE_DIR / "perimeter.mcfunction", render_perimeter(objectives))
+
+    print("Done. Run `/reload` in-game after copying gen/ into data/mansions/.")
+
+
+if __name__ == "__main__":
+    generate_all()

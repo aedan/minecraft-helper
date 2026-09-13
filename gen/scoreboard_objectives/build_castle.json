@@ -1,0 +1,8 @@
+{
+  "name": "mansions_castle",
+  "criteria": "dummy",
+  "display": "sidebar",
+  "description": "Tracks castle/structure integrity for the Mansions defense pack. Incremented on successful defense, decremented on breach.",
+  "default_value": 100,
+  "placeholder": true
+}
