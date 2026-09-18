@@ -34,9 +34,9 @@ Build a golem structure to summon your helper. Higher tiers = more powerful.
 - **Intelligent mining**: Uses correct tool for each block (pickaxe for stone, shovel for dirt, axe for wood), repairs walls it breaks
 
 ### Horse System
-- Detects when you mount a horse
-- Spawns a max-stat horse (30 HP, iron armor, saddled) if you need one
-- Despawns the horse when you get off
+- Detects when you mount a horse (or donkey/mule/camel)
+- Spawns a saddled, armored horse, puts the helper on it, and follows you
+- When you dismount, the helper dismounts and that horse despawns
 
 ### Always Active
 - Speed II + Swiftness II (never gets tired)
@@ -51,7 +51,7 @@ Build a golem structure to summon your helper. Higher tiers = more powerful.
 git clone https://github.com/aedan/minecraft-helper.git
 cd minecraft-helper
 
-# Package the data pack
+# Package the data pack (pack.mcmeta at the zip root)
 make package
 
 # Copy to your world

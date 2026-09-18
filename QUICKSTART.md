@@ -1,71 +1,56 @@
 # Quick Start
 
-## Local Game
-
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/aedan/minecraft-helper.git
-   cd minecraft-helper
-   ```
-
-2. Package the data pack:
-   ```bash
-   make package
-   ```
-
-3. Copy to your world:
-   ```bash
-   cp minecraft-helper.datapack.zip ~/.minecraft/saves/<your-world>/datapacks/
-   ```
-
-4. In Minecraft:
-   ```
-   /reload
-   ```
-
-5. Build a golem structure to summon your helper:
-
-   **Easiest (Tier 1 - Stone):**
-   - Place 4 stone blocks in a 2x2 square
-   - Place a carved pumpkin on top
-   - Walk next to it
-   - Your helper appears!
-
-   **Best (Tier 3 - Netherite):**
-   - Place 4 netherite blocks in a 2x2 square
-   - Place a carved pumpkin on top
-   - Place a diamond block on top of the pumpkin
-   - Your netherite protector appears!
-
-6. Use commands to control your helper:
-   ```
-   /function helper:cmd_set_base    # Mark your base
-   /function helper:cmd_stay        # Stay home mode
-   /function helper:cmd_fetch       # Go mine diamonds
-   /function helper:cmd_watch       # Follow and protect me
-   /function helper:cmd_scan        # Scan for ore
-   /function helper:cmd_golem_help  # Show the golem guide
-   ```
-
-## Server
+## Install
 
 ```bash
-# Package
 make package
-
-# Deploy
-scp minecraft-helper.datapack.zip user@your-server:/path/to/world/datapacks/
+cp minecraft-helper.datapack.zip ~/.minecraft/saves/<world>/datapacks/
 ```
 
-Then in-game: `/reload`
+In Minecraft: `/reload`
+
+You should see: `AI Helper loaded.`
+
+## Summon
+
+Walk next to a golem structure. Blocks are consumed on success.
+
+**Tier 1 — Stone:** 2×2 stone, carved pumpkin on top. Wooden sword + bow.
+
+**Tier 2 — Iron:** 2×2 iron blocks, carved pumpkin on top. Iron gear, sword, bow, shield.
+
+**Tier 3 — Netherite:** 2×2 netherite blocks, carved pumpkin on top, diamond block on the pumpkin. Full netherite, sword, bow, shield.
+
+Admin shortcut: `/function helper:cmd_spawn`
+
+One helper per player. Despawn before building a higher tier.
+
+## Orders
+
+The helper follows and protects you as soon as it spawns (Watch Back).
+
+Clickable list: `/function helper:cmd_golem_help`
+
+Or:
+
+| Order | Function | Trigger |
+|---|---|---|
+| Follow and protect | `/function helper:cmd_watch` | `/trigger helper_cmd set 3` |
+| Patrol base | `/function helper:cmd_stay` | `/trigger helper_cmd set 1` |
+| Mine nearby diamonds | `/function helper:cmd_fetch` | `/trigger helper_cmd set 2` |
+| Mark this spot as base | `/function helper:cmd_set_base` | `/trigger helper_cmd set 4` |
+| Despawn | `/function helper:cmd_despawn` | `/trigger helper_cmd set 5` |
+
+## Combat and horse
+
+- Close: sword. Mid: strafe and close. Far: bow.
+- Shield raises (resistance) when arrows or fireballs come in; the helper sidesteps.
+- Hostiles near you are prioritized.
+- If you take damage, the attacker is hunted.
+- Mount a horse: the helper spawns its own saddled horse, mounts, and follows. Dismount: it gets off and that horse despawns.
 
 ## Tips
 
-- Your helper remembers your base location. Set it with `/function helper:cmd_set_base`
-- Trust other players with `/function helper:cmd_trust` (look at them first)
-- Unknown players who open your chests get destroyed
-- If anything hits you, the attacker gets destroyed instantly
-- The helper builds chests automatically when it returns from a task
-- It cuts trees completely and replants them
-- It smelts ore and cooks food automatically
-- It uses the right tool for every job (pickaxe, shovel, axe)
+- `/function helper:cmd_set_base` before Stay Home, or the helper will follow you instead.
+- Fetch only breaks diamond ore it walks next to (including deepslate). It does not tunnel to Y=-59 by itself.
+- Smelting, chest sorting, and auto-crafting are not wired up yet.

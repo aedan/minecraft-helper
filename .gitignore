@@ -13,3 +13,6 @@ __pycache__/
 .vscode/
 *.swp
 minecraft-helper.datapack.zip
+sidecar/helper-brain.env
+sidecar/names.json
+sidecar/venv/
