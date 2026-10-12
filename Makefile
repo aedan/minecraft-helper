@@ -3,7 +3,7 @@
 package:
 	@echo "Packaging data pack..."
 	rm -f minecraft-helper.datapack.zip
-	zip -r minecraft-helper.datapack.zip datapack/
+	cd datapack && zip -r ../minecraft-helper.datapack.zip pack.mcmeta data
 	@echo "Created minecraft-helper.datapack.zip"
 
 deploy:
