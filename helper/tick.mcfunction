@@ -1,33 +1,22 @@
-# Helper data pack: main tick function
-# Runs every tick to update AI behavior, trust, smelting, tree, mining, horse
+# Main tick
 
-# Check if helper is active
-execute if entity @e[type=villager,tag=helper.active,limit=1] run function helper:combat_ai
-
-# Trust evaluation (friend/foe detection)
-execute if entity @e[type=villager,tag=helper.active,limit=1] run function helper:trust/evaluate
-
-# PVP attack detection: if owner gets hit, attacker becomes instant foe
-execute if entity @e[type=villager,tag=helper.active,limit=1] run function helper:trust/detect_attack
-
-# Auto-smelting (every 20 ticks = 1 second)
-execute if entity @e[type=villager,tag=helper.active,limit=1] if score #smelt_clock helper_config matches 20 run function helper:smelt/auto_smelt
-execute if entity @e[type=villager,tag=helper.active,limit=1] run scoreboard players add #smelt_clock helper_config 1
-execute if entity @e[type=villager,tag=helper.active,limit=1] if score #smelt_clock helper_config matches 20.. run scoreboard players set #smelt_clock helper_config 0
-
-# Horse management (every 10 ticks = 0.5 second)
-execute if entity @e[type=villager,tag=helper.active,limit=1] if score #horse_clock helper_config matches 10 run function helper:horse/manage
-execute if entity @e[type=villager,tag=helper.active,limit=1] run scoreboard players add #horse_clock helper_config 1
-execute if entity @e[type=villager,tag=helper.active,limit=1] if score #horse_clock helper_config matches 10.. run scoreboard players set #horse_clock helper_config 0
-
-# Golem structure detection (every 5 ticks)
+scoreboard players add #golem_clock helper_config 1
 execute if score #golem_clock helper_config matches 5.. run function helper:golem/check_structures
 execute if score #golem_clock helper_config matches 5.. run scoreboard players set #golem_clock helper_config 0
-execute run scoreboard players add #golem_clock helper_config 1
 
-# Speed boost: helper always runs at full speed
-execute as @e[type=villager,tag=helper.active,limit=1] run effect give @s minecraft:speed 2 1 true
-execute as @e[type=villager,tag=helper.active,limit=1] run effect give @s minecraft:swiftness 2 1 true
+execute as @e[tag=helper.active] at @s run function helper:helper_tick
 
-# Fire resistance (from netherite gear)
-execute as @e[type=villager,tag=helper.active,limit=1] run effect give @s minecraft:fire_resistance 4 0 true
+# Owner lifecycle: keep helper locatable, recall, death→respawn
+execute as @a[scores={helper_want=1}] run function helper:lifecycle/owner_tick
+execute as @a[scores={helper_respawn_cd=1..}] run scoreboard players remove @s helper_respawn_cd 1
+
+execute as @a[scores={helper_cmd=1}] at @s run function helper:cmd_stay
+execute as @a[scores={helper_cmd=2}] at @s run function helper:cmd_fetch
+execute as @a[scores={helper_cmd=3}] at @s run function helper:cmd_watch
+execute as @a[scores={helper_cmd=4}] at @s run function helper:cmd_set_base
+execute as @a[scores={helper_cmd=5}] at @s run function helper:cmd_despawn
+execute as @a[scores={helper_cmd=6}] at @s run function helper:cmd_golem_help
+execute as @a[scores={helper_cmd=7}] at @s run function helper:cmd_here
+execute as @a[scores={helper_cmd=8}] at @s run function helper:cmd_private_help
+execute as @a[scores={helper_cmd=1..}] run scoreboard players set @s helper_cmd 0
+execute as @a run scoreboard players enable @s helper_cmd

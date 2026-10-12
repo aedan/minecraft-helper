@@ -9,4 +9,4 @@ execute if block ~ ~ ~ minecraft:air if block ~ ~-1 ~ minecraft:stone run setblo
 execute if block ~ ~ ~ minecraft:air if block ~ ~1 ~ minecraft:stone run setblock ~ ~ ~ minecraft:stone
 
 # If repaired, notify
-execute if block ~ ~ ~ minecraft:stone run tellraw @a[limit=1] [{"text":"[Helper] ","color":"aqua"},{"text":"Wall repaired. ","color":"green"},{"text":"Replaced broken stone block.","color":"gray"}]
+execute if block ~ ~ ~ minecraft:stone run tellraw @a[tag=helper.my_owner,limit=1] [{"text":"[Helper] ","color":"aqua"},{"text":"Wall repaired. ","color":"green"},{"text":"Replaced broken stone block.","color":"gray"}]

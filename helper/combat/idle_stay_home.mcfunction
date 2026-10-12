@@ -1,13 +1,19 @@
-# Stay home: patrol around base, return if strayed more than 32 blocks
+# Stay at base. Never fall back to following the owner.
+# IMPORTANT: when standing on/near the base marker, do NOT face it + patrol (+6 yaw)
+# — facing a marker at your feet makes yaw unstable and looks like continuous spinning.
+function helper:jobs/my_base
+execute unless entity @e[type=marker,tag=helper.my_base,limit=1] run function helper:jobs/mark_here_as_base
+execute unless entity @e[type=marker,tag=helper.my_base,limit=1] run function helper:jobs/my_base
 
-# Check distance from base
-execute store result score #base_dist helper_config run function helper:combat/calc_base_distance
+# Far from base: warp home
+execute unless entity @e[type=marker,tag=helper.my_base,distance=..64,limit=1] run tp @s @e[type=marker,tag=helper.my_base,sort=nearest,limit=1]
 
-# If strayed too far, return to base
-execute if score #base_dist helper_config matches 33.. run function helper:combat/return_to_base
+# Mid-range: face nearest base and walk in (only when not on top of it)
+execute if entity @e[type=marker,tag=helper.my_base,distance=3..64,limit=1] at @s facing entity @e[type=marker,tag=helper.my_base,sort=nearest,limit=1] feet run tp @s ~ ~ ~ ~ ~
+execute if entity @e[type=marker,tag=helper.my_base,distance=10..64,limit=1] at @s run function helper:move/forward_fast
+execute if entity @e[type=marker,tag=helper.my_base,distance=3..9.99,limit=1] at @s run function helper:move/forward
 
-# If close to base, wander within 16-block radius
-execute if score #base_dist helper_config matches ..16 run function helper:combat/patrol_base
+# At base (<=3): stand still — no patrol spin
+# (intentionally empty beyond keeping rotation)
 
-# If in between, stay put
-execute if score #base_dist helper_config matches 17..32 run function helper:combat/idle_wait
+tag @e[type=marker,tag=helper.my_base] remove helper.my_base

@@ -1,39 +1,27 @@
-# Tier 3: Netherite Golem - Top Tier Helper
-# Requirements: 4 netherite blocks + carved pumpkin + diamond block on top
-# Reward: Full netherite gear, 40 HP, max enchantments, all tools, horse
+function helper:id/assign
+tag @s add helper.summoner
+function helper:golem/has_helper
+execute if entity @s[tag=helper.has_helper] run tag @s remove helper.summoner
+execute if entity @s[tag=helper.has_helper] run tag @s remove helper.has_helper
+execute if entity @s[tag=!helper.summoner] run return 0
 
-# Check if player already has a helper
-execute if entity @e[type=villager,tag=helper.owner=@s,limit=1] run tellraw @s [{"text":"[Helper] ","color":"yellow"},{"text":"You already have a helper! ","color":"gray"},{"text":"Despawn it first with /helper despawn.","color":"red"}]
+fill ~ ~ ~ ~1 ~ ~1 minecraft:air
+execute if block ~ ~1 ~ #helper:golem_heads run setblock ~ ~1 ~ minecraft:air
+execute if block ~1 ~1 ~ #helper:golem_heads run setblock ~1 ~1 ~ minecraft:air
+execute if block ~ ~1 ~1 #helper:golem_heads run setblock ~ ~1 ~1 minecraft:air
+execute if block ~1 ~1 ~1 #helper:golem_heads run setblock ~1 ~1 ~1 minecraft:air
+execute if block ~ ~2 ~ minecraft:diamond_block run setblock ~ ~2 ~ minecraft:air
+execute if block ~1 ~2 ~ minecraft:diamond_block run setblock ~1 ~2 ~ minecraft:air
+execute if block ~ ~2 ~1 minecraft:diamond_block run setblock ~ ~2 ~1 minecraft:air
+execute if block ~1 ~2 ~1 minecraft:diamond_block run setblock ~1 ~2 ~1 minecraft:air
 
-# Spawn Tier 3 helper (full netherite)
-function helper:spawn_helper
+execute at @s run summon mannequin ~ ~1 ~ {Tags:["helper.active","helper.new","helper.tier3"],CustomName:{text:"Helper"},CustomNameVisible:1b,hide_description:1b,description:{text:""},Silent:1b,PersistenceRequired:1b}
+execute as @e[tag=helper.new,limit=1] run function helper:spawn/init
+execute as @e[tag=helper.active] if score @s helper_id = @a[tag=helper.summoner,limit=1] helper_id run function helper:golem/gear_tier3
+execute as @e[tag=helper.active] if score @s helper_id = @a[tag=helper.summoner,limit=1] helper_id run function helper:lifecycle/apply_bound_name
 
-# Consume the golem blocks
-setblock ~ ~ ~ minecraft:air
-setblock ~1 ~ ~ minecraft:air
-setblock ~ ~ ~1 minecraft:air
-setblock ~1 ~ ~1 minecraft:air
-setblock ~ ~1 ~ minecraft:air
-setblock ~ ~2 ~ minecraft:air
-
-# Tag the spawned villager as Tier 3
-tag @e[type=villager,tag=helper.active,limit=1] add helper.tier3
-tag @e[type=villager,tag=helper.active,limit=1] add helper.netherite_golem
-
-# Bind to owner
-execute as @a[limit=1] run data modify entity @e[type=villager,tag=helper.active,limit=1] OwnerUUID set value @s
-
-# Set base to player position
-execute as @a[limit=1] run scoreboard players set #base_x helper_config < #x
-execute as @a[limit=1] run scoreboard players set #base_y helper_config < #y
-execute as @a[limit=1] run scoreboard players set #base_z helper_config < #z
-
-# Set owner as friend
-execute as @a[limit=1] run scoreboard players set @s trust_level 2
-execute as @a[limit=1] run tag @s add helper.friend
-
-# Notify player
-tellraw @s [{"text":"[Helper] ","color":"aqua"},{"text":"NETHERITE HELPER SUMMONED! ","color":"dark_purple","bold":true},{"text":"Tier 3 - Ultimate protection. ","color":"gold"},{"text":"Full netherite, max enchants, 40 HP, all tools, horse system.","color":"gray"}]
-playsound minecraft:entity.wither.spawn master @s
-title @s title [{"text":"HELPER AWAKENED","color":"gold","bold":true}]
-title @s subtitle [{"text":"Netherite Golem Tier 3","color":"gray"}]
+particle minecraft:cloud ~0.5 ~1 ~0.5 0.6 0.6 0.6 0.01 30
+playsound minecraft:entity.wither.spawn master @s ~ ~ ~ 0.6 1.4
+tellraw @s [{"text":"[Helper] ","color":"aqua"},{"text":"Netherite Helper summoned. ","color":"dark_purple","bold":true},{"text":"Full gear, bow, sword, shield.","color":"gold"}]
+tag @s remove helper.has_helper
+tag @s remove helper.summoner
