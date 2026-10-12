@@ -15,3 +15,4 @@ sidecar/names.json
 sidecar/venv/
 *.bak
 *.pre_extend
+.pytest_cache/

@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Minecraft helper chat brain.
 
-Tails the vanilla server log, sends addressed chat to an OpenAI-compatible
-endpoint, and applies structured jobs over RCON.
+Tails the vanilla server log and turns the owner's addressed chat into helper actions:
+  * high-confidence keyword orders map straight onto tool calls (no model needed);
+  * everything else goes to an OpenAI-compatible model through a bounded agent loop
+    (agent.py) that may only use the fixed tool set in tools.py.
+Every action goes through the datapack's helper:api entry points over one persistent
+RCON connection (rcon_client.py).
 """
 
 from __future__ import annotations
@@ -10,12 +14,15 @@ from __future__ import annotations
 import json
 import os
 import re
-import socket
 import struct
 import sys
 import time
 import zlib
 from pathlib import Path
+
+from agent import Agent, OpenAIModel
+from rcon_client import RconClient, reject_public_chat
+from tools import Dispatcher, RAIL_TYPES, resolve_recipe
 
 CHAT_RE = re.compile(
     r"\]: (?:\[Not Secure\] )?(?:\[CHAT\] )?<([^>]+)> (.+)$"
@@ -42,411 +49,6 @@ WHISPER_RE_ALT = re.compile(
 # Wake signal when datapack helper:w runs (appears as System chat in log).
 INBOX_WAKE_RE = re.compile(r"Running function helper:(?:w|msg)\b")
 
-JOBS = {
-    "come_here": 1,
-    "stay_home": 2,
-    "stop": 3,
-    "set_base": 4,
-    "cut_trees": 5,
-    "place_chest": 6,
-    "raid_here": 7,
-    "gather": 5,
-    "dig_straight": 8,
-    "smelt": 9,
-    "craft": 10,
-    "hunt": 11,
-    "lay_rails": 12,
-    "clear_wall_torches": 13,
-    "clear_rails": 14,
-    "repair_rails": 15,
-}
-
-GTYPES = {
-    "wood": 1,
-    "logs": 1,
-    "tree": 1,
-    "coal": 2,
-    "iron": 3,
-    "copper": 4,
-    "gold": 5,
-    "redstone": 6,
-    "lapis": 7,
-    "diamond": 8,
-    "diamonds": 8,
-    "emerald": 9,
-    "emeralds": 9,
-    "quartz": 10,
-    "debris": 11,
-    "netherite": 11,
-    "food": 12,
-    "meat": 12,
-    "beef": 12,
-    "pork": 12,
-    "chicken": 12,
-    "mutton": 12,
-    "hunt": 12,
-    "animal": 12,
-    "animals": 12,
-    "cow": 12,
-    "pig": 12,
-}
-
-# Common craftable items → (minecraft_id, count_per_craft, optional display).
-# Brain crafts by giving the result after a come-to-owner deliver job.
-# Unknown names are refused owner-only.
-RECIPES: dict[str, tuple[str, int]] = {
-    "stick": ("minecraft:stick", 4),
-    "sticks": ("minecraft:stick", 4),
-    "torch": ("minecraft:torch", 4),
-    "torches": ("minecraft:torch", 4),
-    "crafting table": ("minecraft:crafting_table", 1),
-    "crafting_table": ("minecraft:crafting_table", 1),
-    "furnace": ("minecraft:furnace", 1),
-    "chest": ("minecraft:chest", 1),
-    "ladder": ("minecraft:ladder", 3),
-    "ladders": ("minecraft:ladder", 3),
-    "oak planks": ("minecraft:oak_planks", 4),
-    "planks": ("minecraft:oak_planks", 4),
-    "oak_planks": ("minecraft:oak_planks", 4),
-    "bread": ("minecraft:bread", 1),
-    "bowl": ("minecraft:bowl", 4),
-    "bucket": ("minecraft:bucket", 1),
-    "shears": ("minecraft:shears", 1),
-    "flint and steel": ("minecraft:flint_and_steel", 1),
-    "flint_and_steel": ("minecraft:flint_and_steel", 1),
-    "shield": ("minecraft:shield", 1),
-    "bow": ("minecraft:bow", 1),
-    "arrow": ("minecraft:arrow", 4),
-    "arrows": ("minecraft:arrow", 4),
-    "iron ingot": ("minecraft:iron_ingot", 1),
-    "iron_ingot": ("minecraft:iron_ingot", 1),
-    "gold ingot": ("minecraft:gold_ingot", 1),
-    "gold_ingot": ("minecraft:gold_ingot", 1),
-    "copper ingot": ("minecraft:copper_ingot", 1),
-    "copper_ingot": ("minecraft:copper_ingot", 1),
-    "iron pickaxe": ("minecraft:iron_pickaxe", 1),
-    "iron_pickaxe": ("minecraft:iron_pickaxe", 1),
-    "iron sword": ("minecraft:iron_sword", 1),
-    "iron_sword": ("minecraft:iron_sword", 1),
-    "iron axe": ("minecraft:iron_axe", 1),
-    "iron_axe": ("minecraft:iron_axe", 1),
-    "diamond pickaxe": ("minecraft:diamond_pickaxe", 1),
-    "diamond_pickaxe": ("minecraft:diamond_pickaxe", 1),
-    "diamond sword": ("minecraft:diamond_sword", 1),
-    "diamond_sword": ("minecraft:diamond_sword", 1),
-    "rail": ("minecraft:rail", 16),
-    "rails": ("minecraft:rail", 16),
-    "iron rail": ("minecraft:rail", 16),
-    "iron rails": ("minecraft:rail", 16),
-    "powered rail": ("minecraft:powered_rail", 6),
-    "powered rails": ("minecraft:powered_rail", 6),
-    "powered_rail": ("minecraft:powered_rail", 6),
-    "detector rail": ("minecraft:detector_rail", 6),
-    "detector rails": ("minecraft:detector_rail", 6),
-    "activator rail": ("minecraft:activator_rail", 6),
-    "activator rails": ("minecraft:activator_rail", 6),
-    "minecart": ("minecraft:minecart", 1),
-    "boat": ("minecraft:oak_boat", 1),
-    "oak boat": ("minecraft:oak_boat", 1),
-    "oak_boat": ("minecraft:oak_boat", 1),
-    "hopper": ("minecraft:hopper", 1),
-    "piston": ("minecraft:piston", 1),
-    "sticky piston": ("minecraft:sticky_piston", 1),
-    "sticky_piston": ("minecraft:sticky_piston", 1),
-    "observer": ("minecraft:observer", 1),
-    "dispenser": ("minecraft:dispenser", 1),
-    "dropper": ("minecraft:dropper", 1),
-    "lever": ("minecraft:lever", 1),
-    "redstone torch": ("minecraft:redstone_torch", 1),
-    "redstone_torch": ("minecraft:redstone_torch", 1),
-    "compass": ("minecraft:compass", 1),
-    "clock": ("minecraft:clock", 1),
-    "map": ("minecraft:map", 1),
-    "book": ("minecraft:book", 1),
-    "bookshelf": ("minecraft:bookshelf", 1),
-    "anvil": ("minecraft:anvil", 1),
-    "enchanting table": ("minecraft:enchanting_table", 1),
-    "enchanting_table": ("minecraft:enchanting_table", 1),
-    "ender chest": ("minecraft:ender_chest", 1),
-    "ender_chest": ("minecraft:ender_chest", 1),
-    "glass": ("minecraft:glass", 1),
-    "glass pane": ("minecraft:glass_pane", 16),
-    "glass_pane": ("minecraft:glass_pane", 16),
-    "paper": ("minecraft:paper", 3),
-    "sugar": ("minecraft:sugar", 1),
-    "bed": ("minecraft:white_bed", 1),
-    "white bed": ("minecraft:white_bed", 1),
-    "campfire": ("minecraft:campfire", 1),
-    "tnt": ("minecraft:tnt", 1),
-    "slime block": ("minecraft:slime_block", 1),
-    "slime_block": ("minecraft:slime_block", 1),
-}
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "come_here",
-            "description": "Leave work and come to the owner. ONLY when they explicitly say come here, come to me, come over, follow me, or bare come/here. NEVER for follow my pattern, keep laying, tracks, dig, craft, or other work.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stay_home",
-            "description": "Stay at the marked base and work or patrol there.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stop",
-            "description": "Cancel queued jobs and wait where the helper is now.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_base",
-            "description": "Mark the owner's current position as home/base.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cut_trees",
-            "description": "Cut trees and gather logs (full player inventory, then return to base).",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "gather",
-            "description": "Search far (up to ~48 blocks, and underground for ores), mine with the right tool, and carry up to a full player inventory (36 stacks). Use for diamonds, redstone, coal, iron, gold, copper, lapis, emerald, quartz, ancient debris, or wood.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "resource": {
-                        "type": "string",
-                        "description": "wood, coal, iron, copper, gold, redstone, lapis, diamond, emerald, quartz, debris, or food/meat",
-                    }
-                },
-                "required": ["resource"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "place_chest",
-            "description": "Build a labeled chest at base and store gathered items (e.g. wood).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "label": {
-                        "type": "string",
-                        "description": "Chest name, e.g. Wood",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "raid_here",
-            "description": "Go to the owner's current location (the camp/tower they are pointing out) and kill pillagers, vindicators, evokers, ravagers, witches.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "name",
-            "description": "Rename the helper. Use when the owner says I name you X, your name is X, or call you X.",
-            "parameters": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "say",
-            "description": "Short in-character reply to the owner (one sentence). Owner-only tellraw.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "craft",
-            "description": "Craft a named item (any known craftable) and bring it to the owner. item is a plain name like stick, torch, rail, iron pickaxe.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "item": {"type": "string"},
-                    "count": {"type": "integer", "description": "How many to deliver (default 1 stack worth of recipe output)"},
-                },
-                "required": ["item"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "dig_straight",
-            "description": "Dig a straight 2-tall tunnel in the owner's look direction for N blocks.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "blocks": {"type": "integer", "description": "How many blocks forward to dig"},
-                },
-                "required": ["blocks"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "smelt",
-            "description": "Return to base and smelt a named material (iron, gold, copper, debris, etc.).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "material": {"type": "string"},
-                },
-                "required": ["material"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "bring",
-            "description": "Come to the owner now (deliver / come here with results).",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "lay_rails",
-            "description": "Lay rails down a tunnel/path in the owner's look direction. Learns the owner's recent rail pattern (side lanes vs center, N normals then powered, redstone torch) and continues it. Use for lay rails, keep laying tracks, follow my pattern, finish the tunnel in my pattern, complete the tunnel with my pattern, continue pattern, same as I was doing, side tracks, rails down this tunnel, all the way to the end, entire tunnel. Phrases like all the way / to the end / entire tunnel mean keep going until the tunnel ends (blocks=10000), not a short default. NEVER use come_here for these. Optionally force powered/detector/activator.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "blocks": {"type": "integer", "description": "How many rails/steps to place. Default 512. Use 10000 (or omit with all-the-way phrasing) to continue until the tunnel naturally ends."},
-                    "rail_type": {
-                        "type": "string",
-                        "description": "auto/pattern (default: learn from nearby rails), or rail/powered/detector/activator to force type",
-                    },
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "clear_wall_torches",
-            "description": "Clear redstone torches along the tunnel per explicit targets/exceptions. Set clear_walls/clear_floor from the order (walls only, floor only, or both). Honor leave/keep/except/don't touch. NEVER dig or gather redstone ore for this.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "blocks": {"type": "integer", "description": "How far to walk clearing. Default 512. Use 10000 for all-the-way / entire tunnel."},
-                    "clear_walls": {"type": "integer", "description": "1 to break redstone_wall_torch; 0 to leave walls."},
-                    "clear_floor": {"type": "integer", "description": "1 to break floor redstone_torch; 0 to leave floor."},
-                },
-            },
-        },
-    },
-
-    {
-        "type": "function",
-        "function": {
-            "name": "clear_rails",
-            "description": "Owner-only cleanup: strip bad/gappy rail work along look without destroying a good continuous dual-side sample. Phrases: undo the bad rails, clean up the messed rails, remove the bad tracks, strip the messed rails. Skips good sample; clears rails/powered/center floor redstone torches through the mess; stops if good pattern resumes. Does NOT restart laying.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "blocks": {"type": "integer", "description": "How far to walk cleaning. Default 256."},
-                },
-            },
-        },
-    },
-
-
-    {
-        "type": "function",
-        "function": {
-            "name": "repair_rails",
-            "description": "Walk the tunnel from the owner and replace missing/broken minecart rails along the learned pattern (side vs center, powered spacing). Phrases: repair the tracks, fix the rails, replace missing rails/tracks, fill in the missing tracks. Uses setblock like other rail jobs (visual inventory). Does NOT strip good rails or clear rails. Prefer this over lay_rails when they want gaps fixed rather than extending the tip.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "blocks": {"type": "integer", "description": "Max blocks to walk while repairing. Default 512; 10000 = until end."},
-                },
-            },
-        },
-    },
-
-    {
-        "type": "function",
-        "function": {
-            "name": "kill_player",
-            "description": "Hunt and kill a named online player. Journeys on foot/horse/boat; may tunnel. Never teleports onto them.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "player": {"type": "string", "description": "Exact player name"},
-                },
-                "required": ["player"],
-            },
-        },
-    },
-]
-
-SYSTEM = """You are the brain of a named Minecraft helper (an armored companion bound to one player).
-You only output tool calls. You do not control blocks yourself; the body runs skills.
-All say replies are private (owner-only tellraw).
-
-Skills you can queue (they run in order):
-- come_here / bring: ONLY explicit come-here / follow me / come to me. Never for 'follow my pattern' or laying tracks (use lay_rails).
-- stay_home: remain at base.
-- stop: cancel jobs including hunts.
-- set_base: owner's current spot is home.
-- cut_trees / gather: mine resource or hunt animals for food, then return.
-- place_chest: chest at base.
-- raid_here: kill pillagers at owner's location.
-- craft: craft an arbitrary known item (stick, torch, rail, tools, …) and bring it.
-- dig_straight: dig straight N blocks in the owner's facing direction.
-- clear_rails: undo/clean messed rails along look (skips good continuous sample; strips gappy bad stretch + center floor torches only). Does not restart laying.
-- repair_rails: fix/replace missing rails along the existing track from where the owner stands (fill gaps). Prefer over lay_rails for "repair the tracks" / "fix the rails".
-- clear_wall_torches: clear redstone torches per order — set clear_walls/clear_floor from targets and leave/keep/except. 'leave floor' → walls only; 'all torches' → both; 'floor but leave walls' → floor only. Never dig/gather for this.
-- lay_rails: continue the owner's rail pattern down the tunnel (side lanes, powered spacing, torches). 'All the way' / 'to the end' / 'entire tunnel' / 'finish the tunnel in my pattern' / keep laying without a number → continue until tunnel ends (or owner stop). Default length is long; do not invent a short cap.
-- smelt: return to base and smelt iron/gold/copper/debris/etc.
-- kill_player: hunt a named online player. Journey on foot/horse/boat; may tunnel. NEVER teleport onto the victim.
-- say: brief confirmation.
-
-If they chain tasks, emit several tools in order.
-Refuse impossible work with say.
-Keep say to one short sentence in first person.
-"""
-
-
 def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -462,65 +64,9 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-# Hard ban: never broadcast helper/test traffic to all players.
-# `say` and bare `tellraw @a` show up as public chat. Owner tips/acks must use
-# tellraw @a[name=…] / @a[tag=helper.owner…] / @s only.
-_PUBLIC_CHAT_RE = re.compile(
-    r"(?:^|[;])say\b"  # bare say at start / after ;
-    r"|(?:^|[\s;])run\s+say\b"  # execute … run say
-    r"|tellraw\s+@a(?!\[)"  # tellraw @a without selector filters
-    r"|tellraw\s+@a\[limit\s*="  # tellraw @a[limit=1] — not owner-bound
-)
-
-
-def _reject_public_chat(command: str) -> str | None:
-    """Return a reason if command would be visible to everyone in chat."""
-    c = (command or "").strip()
-    if not c:
-        return None
-    if _PUBLIC_CHAT_RE.search(c):
-        return f"refused public chat RCON: {c[:120]}"
-    return None
-
-
-class Rcon:
-    def __init__(self, host: str, port: int, password: str) -> None:
-        self.host = host
-        self.port = port
-        self.password = password
-
-    def cmd(self, command: str) -> str:
-        bad = _reject_public_chat(command)
-        if bad:
-            print(bad, flush=True)
-            return ""
-        s = socket.create_connection((self.host, self.port), 8)
-        try:
-            def send(ident: int, typ: int, payload: str) -> None:
-                body = struct.pack("<ii", ident, typ) + payload.encode("utf-8") + b"\x00\x00"
-                s.sendall(struct.pack("<i", len(body)) + body)
-
-            def recv() -> str:
-                raw = s.recv(4)
-                if not raw:
-                    return ""
-                (ln,) = struct.unpack("<i", raw)
-                body = b""
-                while len(body) < ln:
-                    chunk = s.recv(ln - len(body))
-                    if not chunk:
-                        break
-                    body += chunk
-                return body[8:-2].decode("utf-8", "replace")
-
-            send(1, 3, self.password)
-            auth = recv()
-            if auth is None:
-                return ""
-            send(2, 2, command)
-            return recv()
-        finally:
-            s.close()
+# Public-chat guard and the persistent RCON client live in rcon_client.py.
+Rcon = RconClient
+_reject_public_chat = reject_public_chat
 
 
 def parse_chat(line: str) -> tuple[str, str] | None:
@@ -735,24 +281,30 @@ class Brain:
                 for line in props.read_text(encoding="utf-8").splitlines():
                     if line.startswith("rcon.password="):
                         password = line.split("=", 1)[1]
-        self.rcon = Rcon(host, port, password)
+        self.rcon = RconClient(host, port, password)
         self.world = Path(env("HELPER_WORLD_PATH", "/opt/minecraft/world"))
         self._private_tip_at: dict[str, float] = {}
         self.llm_base = env("HELPER_LLM_BASE_URL")
         self.llm_key = env("HELPER_LLM_API_KEY")
         self.llm_model = env("HELPER_LLM_MODEL")
-        self.client = None
+        # auto: use native tool calls, switch to strict JSON if the server rejects tools.
+        tool_mode = (env("HELPER_LLM_TOOL_MODE", "auto") or "auto").lower()
+        if tool_mode not in ("auto", "native", "json"):
+            tool_mode = "auto"
+        self.agent: Agent | None = None
         if self.llm_base and self.llm_model:
             try:
                 from openai import OpenAI
 
-                self.client = OpenAI(
-                    api_key=self.llm_key or "none",
-                    base_url=self.llm_base,
+                client = OpenAI(api_key=self.llm_key or "none", base_url=self.llm_base, max_retries=0)
+                self.agent = Agent(
+                    OpenAIModel(client, self.llm_model),
+                    mode=tool_mode,
+                    timeout=float(env("HELPER_LLM_TIMEOUT", "20") or "20"),
                 )
-                print(f"LLM: {self.llm_model} @ {self.llm_base}", flush=True)
+                print(f"LLM: {self.llm_model} @ {self.llm_base} (tools: {tool_mode})", flush=True)
             except Exception as exc:
-                print(f"LLM init failed, using keyword fallback: {exc}", flush=True)
+                print(f"LLM init failed, keyword orders only: {exc}", flush=True)
 
     def save_names(self) -> None:
         self.names_path.parent.mkdir(parents=True, exist_ok=True)
@@ -850,52 +402,6 @@ class Brain:
         time.sleep(0.8)
         self.rcon.cmd("tag @e[type=minecraft:mannequin] add helper.active")
         return self.helper_is_loaded()
-
-    def enqueue(self, player: str, job: str, interrupt: bool = False, gtype: int = 0) -> str:
-        n = JOBS[job]
-        sel = player_selector(player)
-        # come_here must always reach the datapack (forceload + death→respawn).
-        if job == "come_here":
-            return self._come_here(player, sel)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper. Stand near it or spawn again.")
-            return "cannot find"
-        self.rcon.cmd(f"scoreboard players set #gtype helper_config {gtype}")
-        self.rcon.cmd(f"scoreboard players set #job helper_config {n}")
-        fn = "helper:jobs/force" if interrupt else "helper:jobs/enqueue"
-        return self.rcon.cmd(f"execute as {sel} run function {fn}")
-
-    def _helper_loaded(self) -> bool:
-        out = self.rcon.cmd("execute if entity @e[tag=helper.active]")
-        return bool(out) and "Test passed" in out or (out or "").startswith("True")
-
-    def _come_here(self, player: str, sel: str) -> str:
-        # Datapack owns forceload + death→respawn. Prefer cmd_here; fall back to bring_here.
-        self.ensure_helper_loaded()
-        out = self.rcon.cmd(f"execute as {sel} at @s run function helper:cmd_here")
-        time.sleep(0.5)
-        loaded = self.rcon.cmd("execute if entity @e[tag=helper.active]")
-        if loaded and "passed" in loaded.lower():
-            self.rcon.cmd(f"execute as {sel} at @s run tp @e[tag=helper.active] @s")
-            self.rcon.cmd(
-                "execute as @e[tag=helper.active] run scoreboard players set @s helper_mode 3"
-            )
-            # cmd_here already owner-tellraws; avoid duplicate chat when possible.
-            return out or loaded
-        # Give async recall a couple seconds (chunk load / respawn).
-        for _ in range(6):
-            time.sleep(0.5)
-            loaded = self.rcon.cmd("execute if entity @e[tag=helper.active]")
-            if loaded and "passed" in loaded.lower():
-                self.rcon.cmd(f"execute as {sel} at @s run tp @e[tag=helper.active] @s")
-                return loaded
-        self.rcon.cmd(f"execute as {sel} at @s run function helper:jobs/bring_here")
-        time.sleep(3.5)
-        loaded = self.rcon.cmd("execute if entity @e[tag=helper.active]")
-        if loaded and "passed" in loaded.lower():
-            return loaded
-        self.say(player, "Still looking for your helper — try /trigger helper_cmd set 7")
-        return "cannot find"
 
     def ensure_bound_name(self) -> None:
         """Re-apply names.json onto live helper + helper:bind. Fix within ~1s if wrong/empty/Helper."""
@@ -1015,6 +521,12 @@ class Brain:
             re.search(r"\bstay\b", t) and not re.search(r"stay home|go home", t)
         ):
             calls.append(("stop", {}))
+            return calls
+
+        # Organize chests/barrels: "organize the chests", "sort the base storage".
+        if re.search(r"\b(?:organi[sz]e|sort|tidy)\b.*\b(?:chests?|barrels?|storage|base|items)\b", t):
+            scope = "base" if re.search(r"\b(?:base|storage|all)\b", t) else "ahead"
+            calls.append(("organize", {"scope": scope}))
             return calls
 
         # Repair missing rails — must beat lay_rails (and not be confused with clear).
@@ -1267,376 +779,117 @@ class Brain:
             calls.append(("raid_here", {}))
         return calls
 
-    def fallback(self, text: str) -> list[tuple[str, dict]]:
-        calls = self.keyword_orders(text)
-        if not calls:
-            t = (text or "").lower()
-            if re.search(
-                r"\b(?:rail|track|pattern|tunnel)\b",
-                t,
-            ) and re.search(
-                r"\b(?:finish|complete|lay|keep|continue|follow|pattern)\b",
-                t,
-            ):
-                calls.append(("lay_rails", {"blocks": 10000, "rail_type": "auto"}))
-            else:
-                calls.append(("say", {"text": "Say come here, stay home, or name me."}))
-        return calls
-
-    def llm(self, player: str, text: str) -> list[tuple[str, dict]]:
-        if not self.client:
-            return self.fallback(text)
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.llm_model,
-                temperature=0.2,
-                messages=[
-                    {"role": "system", "content": SYSTEM},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Helper name: {self.helper_name(player)}\n"
-                            f"Owner: {player}\n"
-                            f"Order: {text}"
-                        ),
-                    },
-                ],
-                tools=TOOLS,
-                tool_choice="auto",
-            )
-            msg = resp.choices[0].message
-            calls: list[tuple[str, dict]] = []
-            for tc in msg.tool_calls or []:
-                args = {}
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                calls.append((tc.function.name, args))
-            if not calls and msg.content:
-                calls.append(("say", {"text": msg.content.strip()[:180]}))
-            return calls or self.fallback(text)
-        except Exception as exc:
-            print(f"LLM error: {exc}", flush=True)
-            return self.fallback(text)
-
-    def resolve_recipe(self, item: str) -> tuple[str, int] | None:
-        key = re.sub(r"\s+", " ", item.lower().strip().replace("-", " "))
-        key = key.replace("minecraft:", "")
-        if key in RECIPES:
-            return RECIPES[key]
-        # underscored form
-        uk = key.replace(" ", "_")
-        if uk in RECIPES:
-            return RECIPES[uk]
-        # Also accept raw minecraft:id only when already in RECIPES values
-        mid = key if key.startswith("minecraft:") else f"minecraft:{uk}"
-        for iid, n in RECIPES.values():
-            if iid == mid:
-                return (iid, n)
-        return None
-
-    def start_dig(self, player: str, blocks: int, keep: bool = False, store: bool = False) -> str:
-        blocks = max(1, min(int(blocks), 2000))
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        # #dig_keep 1: dig_start must not teleport onto the owner (further / keep digging).
-        # #dig_store 1: deposit drops into a work-face chest, not the job-6 wood dump.
-        self.rcon.cmd(f"scoreboard players set #dig helper_config {blocks}")
-        self.rcon.cmd(f"scoreboard players set #dig_keep helper_config {1 if keep else 0}")
-        self.rcon.cmd(f"scoreboard players set #dig_store helper_config {1 if store else 0}")
-        print(f"dig_straight blocks={blocks} keep={int(bool(keep))} store={int(bool(store))} by {player}", flush=True)
-        if keep and store:
-            self.say(player, f"Continuing the tunnel for {blocks} blocks and putting drops in a chest.")
-        elif keep:
-            self.say(player, f"Continuing the tunnel for {blocks} blocks.")
-        elif store:
-            self.say(player, f"Digging {blocks} blocks and putting drops in a chest.")
-        return self.rcon.cmd(f"execute as {sel} at @s run function helper:jobs/dig_start")
-
-    def start_smelt(self, player: str, material: str) -> str:
-        mat = material.lower().strip()
-        gtype = GTYPES.get(mat, GTYPES.get(mat.replace(" ", "_"), 3))
-        return self.enqueue(player, "smelt", interrupt=True, gtype=gtype)
-
-    def start_craft(self, player: str, item: str, count: int | None = None) -> str:
-        recipe = self.resolve_recipe(item)
-        if not recipe:
-            self.say(player, f"I don't know how to craft {item}.")
-            return "unknown"
-        item_id, per_craft = recipe
-        # count = how many items to deliver
-        n = int(count) if count else per_craft
-        n = max(1, min(n, 64))
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        # storage helper:craft {item, count}
-        safe_id = item_id.replace("\\", "").replace('"', "")
-        self.rcon.cmd(
-            f'data modify storage helper:craft item set value "{safe_id}"'
+    # ------------------------------------------------------------------ tool routing
+    def dispatcher(self, player: str) -> Dispatcher:
+        return Dispatcher(
+            rcon=self.rcon,
+            owner=player,
+            say=self.say,
+            ensure_loaded=self.ensure_helper_loaded,
+            resolve_player=self._resolve_hunt_target,
         )
-        self.rcon.cmd(f"data modify storage helper:craft count set value {n}")
-        self.rcon.cmd("scoreboard players set #job helper_config 10")
-        self.rcon.cmd("scoreboard players set #gtype helper_config 0")
-        out = self.rcon.cmd(f"execute as {sel} run function helper:jobs/force")
-        self.say(player, f"Crafting {n}× {item_id.replace('minecraft:', '')} — coming to you.")
-        return out
 
+    def _resolve_hunt_target(self, name: str) -> str | None:
+        target = re.sub(r"[^A-Za-z0-9_]", "", name or "")[:16]
+        if not target or target.lower() in KILL_TARGET_STOPWORDS:
+            return None
+        return self.resolve_online_player(target)
 
-
-    def start_clear_rails(self, player: str, blocks: int | None = None) -> str:
-        n = int(blocks) if blocks else 256
-        n = max(1, min(n, 10000))
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        self.rcon.cmd(f"scoreboard players set #dig helper_config {n}")
-        out = self.rcon.cmd(
-            f"execute as {sel} at @s run function helper:jobs/clear_rails_start"
-        )
-        print(f"clear_rails {n} by {player}", flush=True)
-        self.say(
-            player,
-            f"Cleaning messed rails up to {n} blocks along your look — skipping good continuous sample. Say stop to cancel. I will not restart laying.",
-        )
-        return out
-
-
-    def start_repair_rails(self, player: str, blocks: int | None = None) -> str:
-        n = int(blocks) if blocks else 512
-        n = max(1, min(n, 10000))
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        self.rcon.cmd(f"scoreboard players set #dig helper_config {n}")
-        out = self.rcon.cmd(
-            f"execute as {sel} at @s run function helper:jobs/repair_rails_start"
-        )
-        print(f"repair_rails {n} by {player}", flush=True)
-        self.say(
-            player,
-            f"Repairing missing rails up to {n} blocks from here — say stop to cancel.",
-        )
-        return out
-
-    def start_clear_wall_torches(
-        self,
-        player: str,
-        blocks: int | None = None,
-        clear_walls: int | None = None,
-        clear_floor: int | None = None,
-    ) -> str:
-        n = int(blocks) if blocks else 512
-        n = max(1, min(n, 10000))
-        if clear_walls is None and clear_floor is None:
-            # Legacy LLM call with no flags — safer walls-only default
-            cw, cf = 1, 0
-        else:
-            cw = 1 if clear_walls is None else (1 if int(clear_walls) else 0)
-            cf = 0 if clear_floor is None else (1 if int(clear_floor) else 0)
-        if cw == 0 and cf == 0:
-            self.say(player, "Nothing to clear — say walls, floor, or all.")
-            return "nothing"
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        self.rcon.cmd(f"scoreboard players set #dig helper_config {n}")
-        self.rcon.cmd(f"scoreboard players set #clear_walls helper_config {cw}")
-        self.rcon.cmd(f"scoreboard players set #clear_floor helper_config {cf}")
-        out = self.rcon.cmd(
-            f"execute as {sel} at @s run function helper:jobs/clear_wall_torches_start"
-        )
-        if cw and cf:
-            summary = "Clearing all redstone torches (walls and floor)."
-        elif cw:
-            summary = "Clearing wall torches only; leaving floor."
-        else:
-            summary = "Clearing floor torches only; leaving walls."
-        print(f"clear_torches walls={cw} floor={cf} n={n} by {player}", flush=True)
-        self.say(player, summary)
-        return out
-
-    def start_lay_rails(self, player: str, blocks: int | None = None, rail_type: str = "") -> str:
-        # 512 default; 10000 = continue until tunnel naturally ends (or owner stop)
-        n = int(blocks) if blocks else 512
-        n = max(1, min(n, 10000))
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        rtype = (rail_type or "").lower().strip().replace(" ", "_")
-        type_map = {
-            "": 0,
-            "rail": 0,
-            "rails": 0,
-            "normal": 0,
-            "iron": 0,
-            "powered": 1,
-            "powered_rail": 1,
-            "powered_rails": 1,
-            "detector": 2,
-            "detector_rail": 2,
-            "activator": 3,
-            "activator_rail": 3,
-        }
-        # 0 means "auto-detect from nearby demo rails" — leave #brain_rail at 0
-        brain_type = type_map.get(rtype, 0)
-        # If caller explicitly said powered/etc, force; if plain "rail", also force normal (1 would be wrong)
-        # Use #brain_rail: 0=auto, 10+gtype to force including normal (10=rail, 11=powered…)
-        # auto/empty/plain rail → detect from nearby blocks; powered/detector/activator force
-        if rtype in {"", "auto", "rail", "rails", "normal", "iron"}:
-            self.rcon.cmd("scoreboard players set #brain_rail helper_config 0")
-        else:
-            force = 10 + brain_type
-            self.rcon.cmd(f"scoreboard players set #brain_rail helper_config {force}")
-        self.rcon.cmd(f"scoreboard players set #dig helper_config {n}")
-        out = self.rcon.cmd(f"execute as {sel} at @s run function helper:jobs/rail_start")
-        print(f"lay_rails {n} type={rtype or 'auto'} by {player}", flush=True)
-        if n >= 5000:
-            self.say(player, "Laying until the tunnel ends (or you tell me to stop).")
-        elif blocks is None:
-            self.say(player, f"Laying rails for up to {n} blocks — say stop when done.")
-        # Pattern learn may find nothing — rail_start still forces job 12 with plain rails.
-        # Never fall back to come_here; tell owner if RCON looks empty.
-        low = (out or "").lower()
-        if not out or "unknown function" in low or "incorrect" in low:
-            self.say(player, "Starting rail lay (pattern fallback).")
-            print(f"lay_rails fallback note for {player}: {out!r}", flush=True)
-        return out
-
-    def start_hunt(self, player: str, target: str) -> str:
-        if not self.is_owner(player):
-            print(f"hunt denied for non-owner {player}", flush=True)
-            return "not_owner"
-        target_raw = re.sub(r"[^A-Za-z0-9_]", "", target)[:16]
-        if not target_raw or target_raw.lower() in KILL_TARGET_STOPWORDS:
-            self.say(player, "Name a player to hunt.")
-            return "bad"
-        resolved = self.resolve_online_player(target_raw)
-        if not resolved:
-            self.say(player, f"{target_raw} is not online.")
-            return "offline"
-        target = resolved
-        if target.lower() == player.lower():
-            self.say(player, "I will not hunt you.")
-            return "self"
-        sel = player_selector(player)
-        if not self.ensure_helper_loaded():
-            self.say(player, "I cannot find your helper.")
-            return "cannot find"
-        self.rcon.cmd("tag @a remove helper.hunt_victim")
-        self.rcon.cmd(f"tag @a[name={target},limit=1] add helper.hunt_victim")
-        out = self.rcon.cmd(f"execute as {sel} run function helper:jobs/hunt_start")
-        print(f"hunt {target} ordered by {player}", flush=True)
-        return out
-
-
-    def apply(self, player: str, calls: list[tuple[str, dict]], order: str = "") -> None:
-        said = False
-        failed = False
+    def keyword_to_tools(self, text: str, calls: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+        """Translate keyword_orders() output into validated tool calls."""
+        out: list[tuple[str, dict]] = []
+        t = (text or "").lower()
         for name, args in calls:
-            if name == "name":
-                if order and not re.search(
-                    r"name you|call you|your name is|rename", order, re.I
-                ):
-                    continue
-                self.set_name(player, str(args.get("name", "Helper")))
-                said = True
-                continue
-            if name == "say":
-                self.say(player, str(args.get("text", "Okay.")))
-                said = True
-                continue
-            if name == "craft":
-                out = self.start_craft(
-                    player,
-                    str(args.get("item", "")),
-                    args.get("count"),
-                )
-                said = True
-                if out in {"cannot find", "unknown"}:
-                    failed = True
-                continue
-            if name == "dig_straight":
-                out = self.start_dig(
-                    player,
-                    int(args.get("blocks", 16)),
-                    keep=bool(args.get("keep")),
-                    store=bool(args.get("store")),
-                )
-                if out == "cannot find":
-                    failed = True
-                continue
-            if name == "clear_rails":
-                out = self.start_clear_rails(player, args.get("blocks"))
-                if out == "cannot find":
-                    failed = True
-                continue
-            if name == "repair_rails":
-                out = self.start_repair_rails(player, args.get("blocks"))
-                if out == "cannot find":
-                    failed = True
-                continue
-            if name == "clear_wall_torches":
-                out = self.start_clear_wall_torches(
-                    player,
-                    args.get("blocks"),
-                    args.get("clear_walls"),
-                    args.get("clear_floor"),
-                )
-                if out == "cannot find":
-                    failed = True
-                continue
-            if name == "lay_rails":
-                out = self.start_lay_rails(
-                    player,
-                    args.get("blocks"),
-                    str(args.get("rail_type", "")),
-                )
-                if out == "cannot find":
-                    failed = True
-                continue
-            if name == "smelt":
-                out = self.start_smelt(player, str(args.get("material", "iron")))
-                continue
-            if name == "bring":
-                out = self.enqueue(player, "come_here", interrupt=True)
-                continue
-            if name == "kill_player":
-                out = self.start_hunt(player, str(args.get("player", "")))
-                said = True
-                continue
-            if name == "gather":
-                resource = str(args.get("resource", "wood")).lower()
-                gtype = GTYPES.get(resource, 1)
-                out = self.enqueue(player, "cut_trees", gtype=gtype)
-            elif name == "cut_trees":
-                out = self.enqueue(player, "cut_trees", gtype=1)
-            elif name in JOBS:
-                out = self.enqueue(
-                    player,
-                    name,
-                    interrupt=name in {"come_here", "stop", "stay_home", "smelt", "hunt"},
-                )
-            else:
-                continue
-            low_out = (out or "").lower()
-            if "do not have a helper" in low_out or "cannot find" in low_out:
-                failed = True
-        if failed:
+            if name == "stay_home":
+                out.append(("set_stay_at_base", {"on": True}))
+            elif name == "stop":
+                out.append(("stop_work", {}))
+                # "wait"/"stay" (not "stay home") = stop and wait here, not follow.
+                if re.search(r"\b(?:wait|stay)\b", t):
+                    out.append(("set_protect_follow", {"on": False}))
+            elif name in ("come_here", "bring"):
+                out.append(("set_protect_follow", {"on": True, "come_now": True}))
+            elif name == "set_base":
+                out.append(("set_base", {}))
+            elif name == "gather":
+                res = str(args.get("resource", "wood"))
+                out.append(("gather", {"resource": "ancient_debris" if res == "debris" else res}))
+            elif name == "dig_straight":
+                out.append(("dig_tunnel", {"blocks": int(args.get("blocks", 64)),
+                                           "continue_tunnel": bool(args.get("keep")),
+                                           "store_in_chest": bool(args.get("store"))}))
+            elif name == "lay_rails":
+                rt = str(args.get("rail_type") or "auto")
+                a = {"action": "lay", "rail_type": rt if rt in RAIL_TYPES else "auto"}
+                if "blocks" in args:
+                    a["blocks"] = int(args["blocks"])
+                out.append(("rails", a))
+            elif name in ("repair_rails", "clear_rails", "clear_wall_torches"):
+                action = {"repair_rails": "repair", "clear_rails": "clear_bad", "clear_wall_torches": "clear_torches"}[name]
+                a = {"action": action}
+                if "blocks" in args:
+                    a["blocks"] = int(args["blocks"])
+                out.append(("rails", a))
+            elif name == "craft":
+                item = resolve_recipe(str(args.get("item", "")))
+                if not item:
+                    out.append(("reply", {"text": f"I don't know how to craft {str(args.get('item', 'that'))[:40]}."}))
+                else:
+                    a = {"item": item}
+                    if args.get("count"):
+                        a["count"] = max(1, min(int(args["count"]), 64))
+                    out.append(("craft", a))
+            elif name == "smelt":
+                mat = str(args.get("material", "iron"))
+                mat = {"debris": "ancient_debris", "netherite": "ancient_debris"}.get(mat, mat)
+                if mat in ("iron", "copper", "gold", "coal", "ancient_debris"):
+                    out.append(("smelt", {"material": mat}))
+                else:
+                    out.append(("reply", {"text": "I can smelt iron, copper, gold, coal or ancient debris."}))
+            elif name == "organize":
+                out.append(("organize_chests", {"scope": args.get("scope", "ahead")}))
+            elif name == "kill_player":
+                out.append(("hunt_player", {"player": str(args.get("player", ""))[:16]}))
+            elif name == "place_chest":
+                # The api has no queue: storing would cancel a job ordered in the same breath.
+                if not out:
+                    out.append(("store_items", {}))
+            elif name == "raid_here":
+                out.append(("raid_here", {}))
+            elif name == "say":
+                out.append(("reply", {"text": str(args.get("text", "Okay."))[:200]}))
+        return out
+
+    def run_tools(self, player: str, calls: list[tuple[str, dict]]) -> None:
+        """Run keyword tool calls in order; stop at the first failure; tell the owner."""
+        if calls and calls[0][0] == "hunt_player" and not self.is_owner(player):
+            print(f"hunt denied for non-owner {player}", flush=True)
             return
-        job_names = {n for n, _ in calls}
-        if job_names & {"come_here", "stay_home", "stop", "bring", "kill_player", "craft"}:
+        d = self.dispatcher(player)
+        last_msg = ""
+        for name, args in calls[:3]:
+            res = d.call(name, args)
+            print(f"tool {name} {args} -> ok={res.get('ok')} {res.get('error')} {res.get('message')!r}", flush=True)
+            if name == "reply":
+                return
+            last_msg = str(res.get("message") or "")
+            if not res.get("ok"):
+                if res.get("error") not in ("owner_offline", "not_owner"):
+                    self.say(player, last_msg or "I couldn't do that.")
+                return
+            if name == "organize_chests" and res.get("reason") == "organized":
+                last_msg = f"Organized {res.get('sorted')} of {res.get('chests_found')} containers; moved {res.get('moved')} items."
+        if last_msg:
+            self.say(player, last_msg)
+
+    def think(self, player: str, text: str) -> None:
+        """Model path for orders that keyword_orders could not classify."""
+        if self.agent is None:
+            self.say(player, "Say come here, stay home, stop, dig 50, or name me.")
             return
-        if not said and calls:
-            self.say(player, "On it.")
+        out = self.agent.run(self.dispatcher(player), self.helper_name(player), text)
+        names = [n for n, _a, _r in out.calls]
+        print(f"agent ({out.mode}) stop={out.stop} calls={names} reply={out.replied!r}", flush=True)
 
     def _inbox_pending(self) -> bool:
         out = (self.rcon.cmd("data get storage helper:inbox pending") or "").lower()
@@ -1738,7 +991,7 @@ class Brain:
             if re.match(
                 r"^(?:dig|craft|smelt|melt|kill|attack|hunt|come|follow|stop|stay|"
                 r"bring|deliver|gather|cut|mine|tunnel|lay|place|remove|clear|clean|break|set\s+base|"
-                r"keep|continue|pattern|track|finish|complete)\b",
+                r"keep|continue|pattern|track|finish|complete|organi[sz]e|sort|protect|guard)\b",
                 low,
             ):
                 body = message.strip()
@@ -1757,9 +1010,12 @@ class Brain:
         direct = self.keyword_orders(body)
         if direct:
             print(f"keyword order: {direct}", flush=True)
-            self.apply(player, direct, order=body)
+            if direct[0][0] == "name":
+                self.set_name(player, str(direct[0][1].get("name", "Helper")))
+                return
+            self.run_tools(player, self.keyword_to_tools(body, direct))
             return
-        self.apply(player, self.llm(player, body), order=body)
+        self.think(player, body)
 
 
 def follow_log(path: Path):

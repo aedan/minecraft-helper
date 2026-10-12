@@ -22,9 +22,10 @@ Build a golem structure to summon your helper. Higher tiers = more powerful.
 | **3 - Netherite** | 4 netherite blocks + pumpkin + diamond block | Full netherite, max enchants, unbreakable | 40 | Horse system, all tools |
 
 ### Behavior Modes
-- **Stay Home**: Patrols base, returns if strayed more than 32 blocks
-- **Fetch Resource**: Wanders to find and mine diamonds, returns to base
-- **Watch Back**: Follows you within 4 blocks, protects at all costs
+- **Protect and follow** (default): follows you, teleports to a safe spot next to you when it falls behind or gets stuck in a hole, and drops any job to defend you, then goes back to it
+- **Stay at base**: stays home and neither follows nor protects. It overrides protect-and-follow while on
+- **Idle**: protect-and-follow off; the helper waits where it is
+- **Fetch Resource** (legacy trigger): wanders to find and mine diamonds
 
 ### Economy & Logistics
 - **Chest organization**: Builds labeled chests at base, sorts items by category
@@ -183,6 +184,12 @@ Every tick:
 └── Every 5 ticks: golem/check_structures
 ```
 
+## AI sidecar
+
+`sidecar/` turns chat orders into helper actions with any OpenAI-compatible model. The model only gets 12 validated tools: get_status, set_protect_follow, set_stay_at_base, set_base, stop_work, gather, dig_tunnel, rails, craft, smelt, organize_chests and reply. Each tool calls one `helper:api/*` datapack function, which checks the request again in-game. See ARCHITECTURE.md.
+
+Deploy the whole `sidecar/` folder (not only `helper_brain.py`) and configure it from `helper-brain.env.example`.
+
 ## Requirements
 
 - Minecraft Java Edition 1.21.x
@@ -192,7 +199,13 @@ Every tick:
 ## Development
 
 ```bash
-# Run the generator
+# Regenerate generated datapack files (safe_spot, chest scan regions)
+make generate
+
+# Tests (datapack checks + sidecar); needs pytest
+make test
+
+# Mansions pack generator (separate pack)
 python3 gen/mansions_gen.py
 
 # Package the data pack
