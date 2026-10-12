@@ -4,7 +4,9 @@
 
 The helper is built entirely with vanilla Minecraft commands and data packs. No mods, no external libraries, no Java. All logic is expressed in `.mcfunction` files and scoreboard operations.
 
-The Python generator (`gen/mansions_gen.py`) is the canonical source. It emits all `.mcfunction` files, scoreboard JSON, tags, and `pack.mcmeta`. Edit the generator, not the generated files.
+`datapack/` is the source of truth and is edited by hand. `make package` zips it as-is. The top-level `helper/` tree is an older copy that is not packaged. `gen/mansions_gen.py` writes only to `gen/` for a separate Mansions defense pack and does not generate this pack.
+
+A Python sidecar (`sidecar/helper_brain.py`) tails the server log for chat, reads the private-order inbox (`/function helper:w`, `/trigger tom`), and drives the helper over RCON by calling `helper:jobs/*`, `helper:cmd_here`, and `helper:lifecycle/apply_bound_name`.
 
 ## Module Breakdown
 
@@ -12,73 +14,42 @@ The Python generator (`gen/mansions_gen.py`) is the canonical source. It emits a
 
 The combat system is a hybrid: high-level state machine + lightweight distance-based decision making.
 
-**Detection:** Every tick, scans for hostile mobs within 24 blocks using `@e[type=#minecraft:hostile,distance=..24,sort=nearest,limit=1]`.
+**Targeting:** `combat/pick_seen` picks the nearest threat with line of sight (`combat/los_check`), trying up to 8 candidates. The target is tagged `helper.targeted`.
 
-**Priority:** If a hostile is within 16 blocks of the owner, the helper switches to `defend_owner` mode. Otherwise it engages the target directly.
+**Priority:** `combat/defend_owner` prefers `helper.priority_target` (whoever hit the owner, see `trust/detect_attack`), then a hunt target, then hostiles near the owner.
 
-**Distance-based actions:**
-- ≤3 blocks: `sword_attack` — melee strike with knockback
-- 4-11 blocks: `strafe` — perpendicular movement to avoid attacks
-- 12-24 blocks: `bow_attack` — fire arrow with 12 damage (crit)
-
-**Targeting:** Uses `sort=nearest` entity selectors. The target is tagged `helper.targeted` for tracking.
+**Actions:** `combat/fight` uses `sword_attack` up close, `mid_range`/`strafe` in between, and `bow_attack` at range. `combat/dodge` raises the shield and sidesteps incoming projectiles.
 
 ### 2. Trust System (`trust/`)
 
-Three trust levels:
-- **0 (Foe):** Destroyed on sight. Players who attack the owner or open chests as unknowns.
-- **1 (Unknown):** Can enter the base but cannot open chests. If they do, they become a foe.
-- **2 (Friend):** Full access. Owner + trusted players.
+Only attacker detection is active: `trust/detect_attack` reads the owner's `HurtTime` and tags the attacker (`mark_attacker`) as `helper.priority_target`.
 
-**Detection flow:**
-1. `check_perimeter` — flags unknowns entering 16-block radius
-2. `check_chest_access` — if unknown is near a chest → `make_foe` (kill)
-3. `hostile_threat` — hostiles within 24 blocks → `engage_hostile` (destroy)
-4. `detect_attack` — if owner's `HurtTime > 0` → `find_attacker` → kill attacker
+The perimeter/chest-access trust system was removed. `cmd_trust`/`cmd_untrust` still set the `helper.friend` tag and `trust_level` score, but nothing reads them.
 
 ### 3. Chest Organization (`chest/`, `storage/`)
 
-**Base chests:** 5 labeled chests (Supplies, Resources, Food, Tools, Misc) built at the base when the helper returns from a task.
-
-**Storage area:** 16x16 zone with 16 categorized chests. Built on demand with `/function helper:cmd_set_storage`.
-
-**Sorting:** Items from the helper's inventory are transferred to chests using `data modify block ... Items set from entity ... Inventory`.
+The old base-chest and storage-grid sorting code was never called and has been removed. Chest placement and item deposit now happen in jobs (`jobs/place_chest`, `jobs/dig_deposit`, `jobs/fill_nearest_chest`). `cmd_set_storage` records a storage center that nothing reads yet.
 
 ### 4. Auto-Smelting (`smelt/`)
 
-Runs every 20 ticks (1 second).
-
-1. Check for furnace within 8 blocks of base
-2. If no furnace, build furnace + smoker + blast furnace with hoppers
-3. Check inventory for fuel (wood, coal, charcoal, blaze rods)
-4. If no fuel, go find wood (cuts tree, replants)
-5. Load ore into furnace, add fuel, start smelting
+Passive auto-smelting is off. Smelting runs as job 9 (`jobs/smelt_job`), which builds a furnace once at the base (`smelt/build_furnace_once`) and loads it (`smelt/load_for_job`).
 
 ### 5. Tree Cutting (`tree/`)
 
-1. Find nearest tree within 32 blocks (oak, spruce, or birch)
-2. Break all logs (axe) and leaves
-3. Collect 16 logs
-4. Replant sapling at cut location
+Tree cutting runs as job 5 (`jobs/cut_trees`): `tree_scan` → `fell_tree`/`fell_logs` → `strip_canopy` → `vacuum_logs` → `replant_stump`. The old `tree/` functions were removed.
 
 ### 6. Intelligent Mining (`mine/`)
 
-Context-aware tool selection:
-- Stone/ore → pickaxe
-- Dirt/gravel → shovel
-- Wood → axe
+Mining is done by jobs (`jobs/dig_*`, `jobs/break_vein`, `mine/break_here`, `mine/scan_near`); tools are held via `spawn/hold_*`. The old `mine/intelligent_mine` tool-selection path was never called and has been removed.
 
-After mining, checks if a wall was broken. If adjacent blocks are stone, replaces the broken block with stone.
-
-`/function helper:cmd_scan` scans a 32-block radius for all ore types (iron, gold, diamond, coal, redstone, lapis, copper) and reports findings.
+`/function helper:cmd_scan` calls `mine/locate_ore`, which only probes 4 adjacent blocks (not a 32-block radius).
 
 ### 7. Horse System (`horse/`)
 
-Runs every 10 ticks (0.5 second).
+Runs every helper tick (`horse/tick`, skipped during hunt job 11).
 
-1. Check if owner is riding a horse (`data get entity @s Vehicle[0]`)
-2. If yes and helper doesn't have a horse → spawn max-stat horse (30 HP, iron armor, saddled)
-3. If no and helper has a horse → despawn it
+1. If the owner is riding a `#helper:mounts` entity and the helper is not mounted → `horse/ensure` (mount an existing helper horse or spawn one)
+2. If the owner is on foot and the helper owns a horse → `horse/despawn_horse`
 
 ### 8. Golem Summoning (`golem/`)
 
@@ -106,48 +77,29 @@ When detected:
 | | `#fetch_target` | What to mine (1=diamond) |
 | | `#storage_x/y/z` | Storage area center |
 | | `#storage_set` | 1 if storage area is set |
-| | `#smelt_clock` | 0-20 tick counter |
-| | `#horse_clock` | 0-10 tick counter |
 | | `#golem_clock` | 0-5 tick counter |
 | `helper_combat` | `#target_id` | Current target |
 | | `#threat_x/y/z` | Threat position |
 | | `#owner_x/y/z` | Owner position |
 | | `#dist` | Distance to threat |
-| `trust_level` | `@p` (per player) | 0=foe, 1=unknown, 2=friend |
+| `trust_level` | per player | Set by `cmd_trust`/`cmd_untrust`; not created in `load` and not read |
 
 ## Tick Loop
 
 ```
-tick.mcfunction (every tick)
-├── combat_ai (if helper active)
-│   ├── decide_action
-│   │   ├── Hostile in 24 blocks? → find_target
-│   │   └── No hostile → idle_behavior (mode-based)
-│   └── trust/evaluate
-│       ├── check_perimeter
-│       ├── check_chest_access
-│       ├── hostile_threat
-│       └── detect_attack (HurtTime > 0)
-├── smelt/auto_smelt (every 20 ticks)
-├── horse/manage (every 10 ticks)
-├── golem/check_structures (every 5 ticks)
-├── effect give speed 2 (every tick)
-├── effect give swiftness 2 (every tick)
-└── effect give fire_resistance 4 (every tick)
+tick.mcfunction (every tick, #minecraft:tick)
+├── golem/check_structures (every 5 ticks, every player)
+├── as each @e[tag=helper.active] → helper_tick
+│   ├── tag owner helper.my_owner, memory/snapshot, chunk forceload refresh
+│   ├── lifecycle/ensure_name, jobs/tick (instant jobs 1-4), horse/tick, move/gravity
+│   ├── trust/detect_attack, combat/calm_golems, combat/dodge
+│   ├── target selection (raid_select / pick_seen / pick_food), combat/defend_owner
+│   ├── combat/fight
+│   ├── long jobs 5-15 (cut_trees, place_chest, raid, dig, smelt, craft, hunt,
+│   │   lay_rails, clear_wall_torches, clear_rails, repair_rails)
+│   └── idle: follow/keep_up or combat/idle_behavior (stay / fetch / watch)
+├── as @a[helper_want=1] → lifecycle/owner_tick (recall, forceload recovery, respawn)
+└── /trigger helper_cmd 1-9 and /trigger tom dispatch
 ```
 
-## File Count
-
-| Module | Files |
-|--------|-------|
-| Combat | 24 |
-| Trust | 11 |
-| Chest/Storage | 9 |
-| Smelting | 5 |
-| Tree | 5 |
-| Mining | 7 |
-| Horse | 3 |
-| Golem | 7 |
-| Commands | 12 |
-| Core (load/tick/spawn) | 3 |
-| **Total** | **~86** |
+The sidecar adds work asynchronously over RCON (`jobs/enqueue`, `jobs/force`, `jobs/*_start`).

@@ -7,11 +7,6 @@ execute if score #feet_solid helper_config matches 1 run function helper:move/ej
 execute store result score @s helper_hx run data get entity @s Pos[0]
 execute store result score @s helper_hy run data get entity @s Pos[1]
 execute store result score @s helper_hz run data get entity @s Pos[2]
-execute store result score #last_hx helper_config run data get entity @s Pos[0]
-execute store result score #last_hy helper_config run data get entity @s Pos[1]
-execute store result score #last_hz helper_config run data get entity @s Pos[2]
-execute store result storage helper:last x int 1 run data get entity @s Pos[0]
-execute store result storage helper:last z int 1 run data get entity @s Pos[2]
 scoreboard players add @s helper_chunk_cd 1
 execute unless score @s helper_fx = @s helper_fx run function helper:chunk/force_here
 execute if score @s helper_chunk_cd matches 20.. run function helper:chunk/refresh

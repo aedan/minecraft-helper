@@ -3,4 +3,3 @@ execute unless score @s helper_mode matches 1..3 run scoreboard players set @s h
 execute if score @s helper_mode matches 1 run function helper:combat/idle_stay_home
 execute if score @s helper_mode matches 2 run function helper:combat/idle_fetch
 execute if score @s helper_mode matches 3 run function helper:combat/idle_watch_back
-execute if score @s helper_mode matches 0 run function helper:combat/idle_watch_back

@@ -44,15 +44,9 @@ scoreboard objectives add helper_recall dummy
 scoreboard objectives add helper_respawn_cd dummy
 scoreboard objectives add helper_cmd trigger
 scoreboard objectives add helper_dig_left dummy
-scoreboard objectives add helper_clear_walls dummy
-scoreboard objectives add helper_clear_floor dummy
 scoreboard objectives add helper_yaw dummy
 # Owner situational memory: quantized look, position, tunnel dig-face yaw.
-scoreboard objectives add helper_oyaw dummy
 scoreboard objectives add helper_tunnel dummy
-scoreboard objectives add helper_ox dummy
-scoreboard objectives add helper_oy dummy
-scoreboard objectives add helper_oz dummy
 scoreboard objectives add helper_hunt_cd dummy
 scoreboard objectives add helper_lz dummy
 scoreboard objectives add helper_ly dummy
@@ -60,7 +54,6 @@ scoreboard objectives add helper_lx dummy
 scoreboard objectives add helper_sz dummy
 scoreboard objectives add helper_sy dummy
 scoreboard objectives add helper_sx dummy
-scoreboard objectives add helper_hunt_mode dummy
 scoreboard objectives add helper_hunt_stuck dummy
 scoreboard objectives add helper_hunt_miss dummy
 scoreboard objectives add helper_tx dummy
@@ -68,8 +61,6 @@ scoreboard objectives add helper_ty dummy
 scoreboard objectives add helper_tz dummy
 
 execute unless score #next_id helper_config matches 1.. run scoreboard players set #next_id helper_config 0
-scoreboard players set #smelt_clock helper_config 0
-scoreboard players set #horse_clock helper_config 0
 scoreboard players set #golem_clock helper_config 0
 
 team add helper

@@ -21,4 +21,3 @@ execute at @s if block ~ ~-1 ~ #helper:passable if block ~ ~ ~ #helper:passable 
 # Sweep drops + unstuck
 execute as @e[type=item,distance=..2.5] run tp @s @e[tag=helper.self,limit=1]
 function helper:jobs/hunt_unstuck
-scoreboard players set @s helper_hunt_mode 2
