@@ -1,6 +1,7 @@
 scoreboard players set @s helper_q1 0
 scoreboard players set @s helper_q2 0
 scoreboard players set @s helper_q3 0
+scoreboard players set @s helper_stay 1
 scoreboard players set @s helper_mode 1
 execute if score @s helper_job matches 11 run function helper:jobs/hunt_cleanup
 function helper:jobs/clear_work

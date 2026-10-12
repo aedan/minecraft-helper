@@ -1,6 +1,9 @@
 # Runs as the newly summoned helper. Summoner is tagged helper.summoner.
 scoreboard players operation @s helper_id = @a[tag=helper.summoner,limit=1] helper_id
 scoreboard players set @s helper_mode 3
+scoreboard players set @s helper_stay 0
+scoreboard players set @s helper_pf 1
+scoreboard players set @s helper_fall 0
 scoreboard players set @s helper_job 0
 scoreboard players set @s helper_q1 0
 scoreboard players set @s helper_q2 0

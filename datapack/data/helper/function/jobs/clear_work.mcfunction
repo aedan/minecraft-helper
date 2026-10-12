@@ -1,4 +1,5 @@
 tag @s add helper.cleaner
+tag @s remove helper.preempted
 tag @s remove helper.raid_set
 tag @s remove helper.cut_announced
 tag @s remove helper.chest_announced

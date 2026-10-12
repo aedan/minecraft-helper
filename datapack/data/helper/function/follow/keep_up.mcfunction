@@ -1,17 +1,11 @@
-# Stay with the owner like a wolf/cat. Teleport if too far or stuck in a hole.
+# Stay with the owner like a wolf/cat. Teleport if too far (or other dimension) or stuck.
 # Personal space widened so Helper does not crowd the owner's mining/swing arc.
 
 # Too far: warp (was 12; now 24).
 execute unless entity @a[tag=helper.my_owner,distance=..24] run function helper:follow/teleport_to_owner
 execute unless entity @a[tag=helper.my_owner,distance=..24] run return 0
 
-# Fallen in a hole / owner climbed: owner is several blocks above and not next to us.
-execute store result score #oy helper_config run data get entity @a[tag=helper.my_owner,limit=1] Pos[1]
-execute store result score #hy helper_config run data get entity @s Pos[1]
-scoreboard players operation #dy helper_config = #oy helper_config
-scoreboard players operation #dy helper_config -= #hy helper_config
-execute if score #dy helper_config matches 4.. unless entity @a[tag=helper.my_owner,distance=..8] run function helper:follow/teleport_to_owner
-execute if score #dy helper_config matches 4.. unless entity @a[tag=helper.my_owner,distance=..8] run return 0
+# Falling behind vertically is handled by follow/fall_check (runs every tick).
 
 # Stuck walking toward the owner for ~1 second.
 execute if entity @a[tag=helper.my_owner,distance=12..] run scoreboard players add @s helper_stuck 1

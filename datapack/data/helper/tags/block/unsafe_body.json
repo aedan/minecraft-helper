@@ -1,0 +1,15 @@
+{
+  "values": [
+    "minecraft:lava",
+    "minecraft:water",
+    "minecraft:bubble_column",
+    "minecraft:fire",
+    "minecraft:soul_fire",
+    "minecraft:powder_snow",
+    "minecraft:sweet_berry_bush",
+    "minecraft:wither_rose",
+    "minecraft:cobweb",
+    "minecraft:end_portal",
+    "minecraft:nether_portal"
+  ]
+}

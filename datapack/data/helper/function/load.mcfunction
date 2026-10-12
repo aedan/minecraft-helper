@@ -59,6 +59,20 @@ scoreboard objectives add helper_hunt_miss dummy
 scoreboard objectives add helper_tx dummy
 scoreboard objectives add helper_ty dummy
 scoreboard objectives add helper_tz dummy
+# Mode switches (combat/apply_mode): stay_at_base overrides protect_follow.
+scoreboard objectives add helper_stay dummy
+scoreboard objectives add helper_pf dummy
+# Fall-recovery counter and paused-job position (protect reflex preempts jobs).
+scoreboard objectives add helper_fall dummy
+scoreboard objectives add helper_wx dummy
+scoreboard objectives add helper_wy dummy
+scoreboard objectives add helper_wz dummy
+scoreboard objectives add helper_wyaw dummy
+scoreboard objectives add helper_wpitch dummy
+# Used by trust/* but never created before.
+scoreboard objectives add trust_level dummy
+# /trigger tom (read by tick.mcfunction) was never created.
+scoreboard objectives add tom trigger
 
 execute unless score #next_id helper_config matches 1.. run scoreboard players set #next_id helper_config 0
 scoreboard players set #golem_clock helper_config 0
@@ -71,6 +85,7 @@ team modify helper nametagVisibility always
 team modify helper color aqua
 
 execute as @a run scoreboard players enable @s helper_cmd
+execute as @a run scoreboard players enable @s tom
 execute as @e[tag=helper.active] run team join helper @s
 execute as @e[tag=helper.active] at @s run function helper:chunk/force_here
 execute as @e[type=marker,tag=helper.base] at @s run forceload add ~ ~

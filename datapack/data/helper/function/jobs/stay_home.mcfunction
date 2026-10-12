@@ -1,3 +1,4 @@
+scoreboard players set @s helper_stay 1
 scoreboard players set @s helper_mode 1
 function helper:jobs/my_base
 execute unless entity @e[type=marker,tag=helper.my_base,limit=1] run function helper:jobs/mark_here_as_base
