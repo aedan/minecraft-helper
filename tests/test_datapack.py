@@ -17,6 +17,7 @@ DP = ROOT / "datapack"
 FN = DP / "data/helper/function"
 sys.path.insert(0, str(ROOT / "tools"))
 import datapack_gen  # noqa: E402
+import pattern_palette as PP  # noqa: E402
 
 
 def functions() -> dict[str, Path]:
@@ -142,6 +143,8 @@ API_PUBLIC = {
     "hunt": {"req", "target"},
     "raid": {"req", "replace"},
     "store_items": {"req", "replace"},
+    "snapshot_slice": {"req", "length"},
+    "stamp_pattern": {"req", "blocks"},
 }
 
 
@@ -165,7 +168,7 @@ def test_api_functions_always_finish_with_result():
                 assert re.search(r"return run function helper:api/internal/(fail|ok|expect|recall)", l), (fn, l)
 
 
-@pytest.mark.parametrize("fn", ["gather", "dig", "rails", "craft", "hunt", "raid"])
+@pytest.mark.parametrize("fn", ["gather", "dig", "rails", "craft", "hunt", "raid", "stamp_pattern"])
 def test_movement_api_refuses_while_staying(fn):
     assert any("#api_stay helper_config matches 1" in l and "staying_at_base" in l for l in code(f"helper:api/{fn}"))
 
@@ -375,3 +378,173 @@ def test_org_scan_regions():
     # south (+z) looks at +z
     assert all(dz > 0 for _, _, dz in datapack_gen.ahead_offsets(0))
     assert all(dx < 0 for dx, _, _ in datapack_gen.ahead_offsets(1))
+
+
+
+# --------------------------------------------------------------------------- tunnel patterns
+CODE = {e: c for c, e in PP.CODES.items()}
+RAIL = "minecraft:rail[shape={}]"
+
+
+def build_tunnel(world, start, facing, length, offset=0, floor_holes=()):
+    """Ideal 3-wide, 2-high tunnel along `facing`: stone shell, rail in the middle, a powered
+    rail every 6th block, redstone torches on the left wall at head height every 6th
+    (3 blocks out of phase), a floor torch-free plain segment otherwise."""
+    for i in range(length):
+        k = i + offset
+        for y in PP.LEVELS:
+            for x in PP.LATERAL:
+                p = datapack_gen._cell_world(start, facing, x, y, i)
+                solid = y in (-1, 2) or abs(x) == 2
+                world[p] = "minecraft:stone" if solid else "minecraft:air"
+        mid = datapack_gen._cell_world(start, facing, 0, 0, i)
+        world[mid] = PP.abs_state(CODE[("minecraft:powered_rail", "along")] if k % 6 == 0 else CODE[("minecraft:rail", "along")], facing)
+        if k % 6 == 3:
+            world[datapack_gen._cell_world(start, facing, 1, 1, i)] = PP.abs_state(CODE[("minecraft:redstone_wall_torch", "R")], facing)
+        if i in floor_holes:
+            world[datapack_gen._cell_world(start, facing, 0, -1, i)] = "minecraft:air"
+    return world
+
+
+def dug_out(world, start, facing, length):
+    """Interior dug, no rails/torches, no shell (the stamp fills the floor/walls)."""
+    for i in range(length):
+        for y in (0, 1):
+            for x in (-1, 0, 1):
+                world[datapack_gen._cell_world(start, facing, x, y, i)] = "minecraft:air"
+    return world
+
+
+def region(world, start, facing, frm, to):
+    """Blocks in a stretch of tunnel; the stamp's filler counts as the same solid block."""
+    return [(lambda b: "minecraft:stone" if b == PP.FILLER else b)(world.get(datapack_gen._cell_world(start, facing, x, y, i), "minecraft:air"))
+            for i in range(frm, to) for y in PP.LEVELS for x in PP.LATERAL]
+
+
+@pytest.mark.parametrize("facing", range(4))
+def test_palette_round_trip_every_facing(facing):
+    for code in PP.CODES:
+        world = {(0, 0, 0): PP.abs_state(code, facing)}
+        assert datapack_gen.sim_classify(world, (0, 0, 0), facing) == code
+
+
+def test_palette_rotation_is_relative():
+    left_torch = CODE[("minecraft:redstone_wall_torch", "L")]
+    # facing south the left is east; facing west the left is south
+    assert PP.abs_state(left_torch, 0).endswith("[facing=east]")
+    assert PP.abs_state(left_torch, 1).endswith("[facing=south]")
+    along = CODE[("minecraft:rail", "along")]
+    assert PP.abs_state(along, 0) == PP.abs_state(along, 2) == RAIL.format("north_south")
+    assert PP.abs_state(along, 1) == RAIL.format("east_west")
+    asc = CODE[("minecraft:powered_rail", "asc_F")]
+    assert [PP.abs_state(asc, f) for f in range(4)] == [f"minecraft:powered_rail[shape=ascending_{d}]" for d in PP.DIRS]
+    # every code has a distinct state per facing
+    for f in range(4):
+        states = [PP.abs_state(c, f) for c in PP.CODES]
+        assert len(states) == len(set(states))
+
+
+def test_cell_layout_serialization():
+    assert PP.WIDTH * PP.HEIGHT == 20
+    assert [PP.cell_pos(PP.cell_index(x, y)) for y in PP.LEVELS for x in PP.LATERAL] == [(x, y) for y in PP.LEVELS for x in PP.LATERAL]
+    read = (FN / "pattern/read_f0.mcfunction").read_text()
+    # facing south: left is +x, behind is -z. Slice 0, x=+1 (left), y=0 -> ~1 ~0 ~-1, cell 8
+    assert "execute positioned ~1 ~0 ~-1 store result storage helper:tmp pscan.slices[0][8] int 1 run function helper:pattern/classify_f0" in read
+    assert read.count("run function helper:pattern/classify_f0") == PP.MAX_DEPTH * 20
+    commit = (FN / "pattern/commit.mcfunction").read_text()
+    assert f"pattern.palette set value {PP.PALETTE_VERSION}" in commit
+
+
+@pytest.mark.parametrize("facing", range(4))
+def test_snapshot_detects_period_and_stamp_continues_in_phase(facing):
+    w = build_tunnel({}, (0, 64, 0), facing, 40)
+    origin = datapack_gen._cell_world((0, 64, 0), facing, 0, 0, 20)
+    pat = datapack_gen.sim_snapshot(w, origin, facing)
+    assert pat["length"] == 6 and pat["verified"]
+    # wipe the rails/torches/shell ahead, then stamp 19 blocks from the same spot
+    ideal = dict(w)
+    for i in range(21, 40):
+        for y in PP.LEVELS:
+            for x in PP.LATERAL:
+                w.pop(datapack_gen._cell_world((0, 64, 0), facing, x, y, i), None)
+    dug_out(w, (0, 64, 0), facing, 40)
+    res = datapack_gen.sim_stamp(w, origin, facing, pat, 19)
+    assert res["ok"] and res["stopped_at"] == 0 and res["reason"] == "done"
+    assert region(w, (0, 64, 0), facing, 21, 40) == region(ideal, (0, 64, 0), facing, 21, 40)
+
+
+def test_stamp_after_helper_moved_along_line_keeps_phase():
+    facing = 3
+    w = build_tunnel({}, (0, 64, 0), facing, 30)
+    pat = datapack_gen.sim_snapshot(w, (20, 64, 0), facing)
+    ideal = build_tunnel({}, (0, 64, 0), facing, 60)
+    dug_out(w, (0, 64, 0), facing, 60)
+    w.update({k: v for k, v in build_tunnel({}, (0, 64, 0), facing, 30).items()})
+    res = datapack_gen.sim_stamp(w, (29, 64, 0), facing, pat, 30)  # helper walked 9 blocks on
+    assert res["ok"]
+    assert region(w, (0, 64, 0), facing, 30, 60) == region(ideal, (0, 64, 0), facing, 30, 60)
+
+
+def test_stamp_rotates_to_new_facing():
+    w = build_tunnel({}, (0, 64, 0), 3, 30)  # east
+    pat = datapack_gen.sim_snapshot(w, (20, 64, 0), 3)
+    start = (100, 64, 100)
+    dug_out(w, start, 2, 25)  # a new tunnel going north
+    res = datapack_gen.sim_stamp(w, datapack_gen._cell_world(start, 2, 0, 0, -1), 2, pat, 24)
+    assert res["ok"]
+    # same relative layout: compare with an ideal north tunnel whose phase starts where the stamp restarts
+    stamped = datapack_gen.sim_snapshot(w, datapack_gen._cell_world(start, 2, 0, 0, 24), 2)
+    assert stamped["length"] == 6 and sorted(map(tuple, stamped["cells"])) == sorted(map(tuple, pat["cells"]))
+    torch = [v for k, v in w.items() if "wall_torch" in v and k[0] >= 99]
+    assert torch and all(v.endswith("[facing=east]") for v in torch)  # left-wall torch points right = east when facing north
+
+
+def test_stamp_fills_floor_and_stops_at_obstruction():
+    facing = 0
+    w = build_tunnel({}, (0, 64, 0), facing, 20)
+    pat = datapack_gen.sim_snapshot(w, (0, 64, 18), facing)
+    dug_out(w, (0, 64, 0), facing, 40)
+    w[datapack_gen._cell_world((0, 64, 0), facing, 0, -1, 20)] = "minecraft:air"  # hole in the floor
+    w[datapack_gen._cell_world((0, 64, 0), facing, -1, 1, 24)] = "minecraft:stone"  # undug block
+    res = datapack_gen.sim_stamp(w, (0, 64, 18), facing, pat, 20)
+    assert res["stopped_at"] == 6 and res["reason"] == "obstructed" and res["ok"]
+    assert w[datapack_gen._cell_world((0, 64, 0), facing, 0, -1, 20)] == PP.FILLER
+    assert "rail" not in w.get(datapack_gen._cell_world((0, 64, 0), facing, 0, 0, 25), "minecraft:air")  # nothing past the stop
+    blocked = datapack_gen.sim_stamp(dict(w), (0, 64, 23), facing, pat, 5)
+    assert blocked["ok"] is False and blocked["stopped_at"] == 1 and blocked["placed"] == 0
+
+
+def test_stamp_is_idempotent():
+    w = build_tunnel({}, (0, 64, 0), 1, 40)
+    pat = datapack_gen.sim_snapshot(w, (-20, 64, 0), 1)
+    again = datapack_gen.sim_stamp(dict(w), (-20, 64, 0), 1, pat, 19)
+    assert again["placed"] == 0 and again["removed"] == 0
+
+
+def test_no_period_and_explicit_length():
+    w = build_tunnel({}, (0, 64, 0), 0, 8)  # only 8 blocks behind: auto needs 16
+    assert datapack_gen.sim_snapshot(w, (0, 64, 8), 0) is None
+    p = datapack_gen.sim_snapshot(w, (0, 64, 8), 0, length=6)
+    assert p["length"] == 6 and p["verified"] is False
+
+
+def test_pattern_api_gates_and_read_only_snapshot():
+    stamp = code("helper:api/stamp_pattern")
+    assert any("matches 1..64" in l and "bad_args" in l for l in stamp)
+    assert any("pattern.cells[0]" in l and "no_pattern" in l for l in stamp)
+    assert any("#api_job helper_config matches 0..4" in l and "busy" in l for l in stamp)
+    snap = code("helper:api/snapshot_slice")
+    assert any("matches 0..8" in l for l in snap)
+    for n in FUNCS:
+        if re.match(r"helper:pattern/(read_f\d|classify_f\d|snapshot|detect|try_|verify_two|commit)", n) or n == "helper:api/snapshot_slice":
+            assert not any(re.search(r"\b(setblock|fill|clone)\b", l) for l in code(n)), n
+
+
+def test_put_and_classify_tables_match_palette():
+    for f in range(4):
+        put = (FN / f"pattern/put_f{f}.mcfunction").read_text()
+        cls = (FN / f"pattern/classify_f{f}.mcfunction").read_text()
+        for c in PP.CODES:
+            st = PP.abs_state(c, f)
+            assert f'matches {c} run return run function helper:pattern/set {{b:"{st}"}}' in put
+            assert f"if block ~ ~ ~ {st} run return {c}" in cls

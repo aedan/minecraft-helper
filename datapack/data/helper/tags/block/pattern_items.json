@@ -1,0 +1,9 @@
+{
+  "values": [
+    "#minecraft:rails",
+    "minecraft:torch",
+    "minecraft:wall_torch",
+    "minecraft:redstone_torch",
+    "minecraft:redstone_wall_torch"
+  ]
+}

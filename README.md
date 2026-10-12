@@ -186,7 +186,7 @@ Every tick:
 
 ## AI sidecar
 
-`sidecar/` turns chat orders into helper actions with any OpenAI-compatible model. The model only gets 12 validated tools: get_status, set_protect_follow, set_stay_at_base, set_base, stop_work, gather, dig_tunnel, rails, craft, smelt, organize_chests and reply. Each tool calls one `helper:api/*` datapack function, which checks the request again in-game. See ARCHITECTURE.md.
+`sidecar/` turns chat orders into helper actions with any OpenAI-compatible model. The model only gets 14 validated tools: get_status, set_protect_follow, set_stay_at_base, set_base, stop_work, gather, dig_tunnel, rails, craft, smelt, organize_chests, snapshot_slice, stamp_pattern and reply. To continue a tunnel's rail/torch layout, snapshot_slice reads the repeating segment behind the helper in-game and stamp_pattern repeats it forward, so the model never has to describe the layout. Each tool calls one `helper:api/*` datapack function, which checks the request again in-game. See ARCHITECTURE.md.
 
 Deploy the whole `sidecar/` folder (not only `helper_brain.py`) and configure it from `helper-brain.env.example`.
 

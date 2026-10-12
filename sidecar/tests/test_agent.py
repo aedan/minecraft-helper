@@ -141,3 +141,13 @@ def test_catalog_lists_every_tool():
     cat = json_catalog()
     for name in T.TOOL_NAMES:
         assert f"- {name}(" in cat
+
+
+def test_snapshot_then_stamp_flow():
+    import test_tools
+    g = FakeGame()
+    g.scan_pattern = test_tools._pattern()
+    model = Script([call("snapshot_slice", {}), call("stamp_pattern", {"blocks": 32}, 1), call("reply", {"text": "Done."}, 2)])
+    out, said, _g = run(model, game=g, max_actions=1)
+    assert [n for n, _a, _r in out.calls] == ["snapshot_slice", "stamp_pattern", "reply"]
+    assert out.calls[1][2]["ok"] and said == ["Done."]  # snapshot does not use up the action budget

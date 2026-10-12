@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import organize
+import pattern_palette as PP
 import snbt
 from rcon_client import RconError
 
@@ -109,6 +110,10 @@ TOOL_SPECS: list[dict] = [
      "parameters": _obj({"material": {"type": "string", "enum": list(SMELT)}, "replace": _REPLACE}, ["material"])},
     {"name": "organize_chests", "description": "Sort and stack chests/barrels. ahead = the containers right in front of the helper, each sorted on its own. base = all storage around the base, consolidated across chests; only works in stay_at_base mode.",
      "parameters": _obj({"scope": {"type": "string", "enum": list(ORGANIZE_SCOPES)}}, ["scope"])},
+    {"name": "snapshot_slice", "description": "Capture the repeating tunnel segment behind the helper (rails, powered rails, torches, floor/walls), relative to its facing. Needed before stamp_pattern. You never describe the layout; the game reads it.",
+     "parameters": _obj({"length": {"type": "integer", "minimum": 0, "maximum": PP.MAX_LENGTH, "description": "Segment length; 0 (default) = detect it."}})},
+    {"name": "stamp_pattern", "description": "Repeat the captured segment forward from the helper (rotated to where it faces): fills floor/walls, then places rails and torches. Stops at undug or unloaded blocks.",
+     "parameters": _obj({"blocks": {"type": "integer", "minimum": 1, "maximum": 64}}, ["blocks"])},
     {"name": "reply", "description": "Send your final short message to the owner and end your turn.",
      "parameters": _obj({"text": {"type": "string", "minLength": 1, "maxLength": 200}}, ["text"])},
 ]
@@ -120,7 +125,7 @@ ROUTER_ONLY = {
     "raid_here": _obj({}),
     "store_items": _obj({}),
 }
-READ_ONLY = {"get_status", "reply"}
+READ_ONLY = {"get_status", "reply", "snapshot_slice"}  # no world changes
 
 
 def openai_tools() -> list[dict]:
@@ -291,6 +296,32 @@ class Dispatcher:
     def _t_smelt(self, material: str, replace: bool = True) -> dict:
         return self._act("smelt", material=SMELT[material], replace=replace)
 
+    def read_pattern(self) -> dict | None:
+        pat = snbt.from_data_get(self.rcon.cmd("data get storage helper:api pattern"))
+        return snbt.plain(pat) if isinstance(pat, dict) else None
+
+    def _t_snapshot_slice(self, length: int = 0) -> dict:
+        res = self.api_retry_unloaded("snapshot_slice", length=length)
+        if not res.get("ok"):
+            return self._result(False, res.get("code"), str(res.get("msg", "")), self.status(), code=res.get("code"))
+        pat = self.read_pattern()
+        if not pat or pat.get("palette") != PP.PALETTE_VERSION:
+            return self._result(False, "datapack_error", "Pattern palette does not match this sidecar; update both together.")
+        summary = summarize_pattern(pat)
+        return self._result(True, None, summary["text"], self.status(), code="captured", pattern=summary)
+
+    def _t_stamp_pattern(self, blocks: int) -> dict:
+        res = self.api_retry_unloaded("stamp_pattern", blocks=blocks)
+        ok = bool(res.get("ok"))
+        extra = {k: res.get(k) for k in ("placed", "removed", "stopped_at", "reason")}
+        extra["rotated"] = bool(res.get("rotated"))
+        msg = str(res.get("msg", ""))
+        if ok:
+            msg = f"Stamped {blocks if not extra['stopped_at'] else extra['stopped_at'] - 1} blocks: placed {extra['placed']}, removed {extra['removed']}."
+            if extra["stopped_at"]:
+                msg += f" Stopped at block {extra['stopped_at']} ({extra['reason']})."
+        return self._result(ok, res.get("code"), msg, self.status(), code=res.get("code"), **extra)
+
     def _t_reply(self, text: str) -> dict:
         self.say(self.owner, text)
         return self._result(True, None, "sent")
@@ -337,3 +368,25 @@ class Dispatcher:
         if not res.get("ok"):
             return done(False, res.get("code"), str(res.get("msg", "")), found)
         return done(True, "organized", str(res.get("msg", "")), found, stats["moved"], stats["sorted"])
+
+
+def summarize_pattern(pat: dict) -> dict:
+    """Human/model-readable view of storage helper:api pattern (the model never edits it)."""
+    cells = pat.get("cells") or []
+    features = []
+    counts: dict[str, int] = {}
+    for d, sl in enumerate(cells):
+        for c, code in enumerate(sl):
+            if code >= PP.FIRST_CODE:
+                x, y = PP.cell_pos(c)
+                name = PP.describe(code)
+                features.append({"slice": d, "x": x, "y": y, "block": name})
+                key = name.split(" ")[0]
+                counts[key] = counts.get(key, 0) + 1
+    facing = PP.DIRS[pat.get("facing", 0) % 4]
+    length = int(pat.get("length", len(cells)))
+    parts = [f"{n} {k}" for k, n in sorted(counts.items())] or ["no rails or torches"]
+    text = f"Captured a {length}-block segment facing {facing}: " + ", ".join(parts) + (
+        "." if pat.get("verified") else " (only one period seen, not verified).")
+    return {"facing": facing, "length": length, "verified": bool(pat.get("verified")),
+            "counts": counts, "features": features[:40], "text": text}

@@ -25,6 +25,9 @@ class FakeGame:
         self.commands: list[str] = []
         self.api_calls: list[tuple[str, dict]] = []
         self.offline = False
+        self.pattern = None  # storage helper:api pattern
+        self.scan_pattern = None  # what the next snapshot would capture (None = no pattern)
+        self.stamp_result = {"placed": 12, "removed": 0, "stopped_at": 0, "reason": "done", "rotated": 0}
 
     # RCON surface
     def cmd(self, command: str) -> str:
@@ -45,7 +48,7 @@ class FakeGame:
             return ""
         if command.startswith("data get storage helper:api "):
             what = command.rsplit(" ", 1)[1]
-            val = {"result": self.result, "status": self.status, "org": self.org}[what]
+            val = {"result": self.result, "status": self.status, "org": self.org, "pattern": self.pattern}[what]
             if val is None:
                 return "Found no elements matching " + what
             return f"Storage helper:api has the following contents: {snbt.dumps(val)}"
@@ -115,4 +118,20 @@ class FakeGame:
                 c["items"] = snbt.plain(items)
             self.org = None
             return self._res(req, fn, True, "organized", chests_found=len(self.chests))
+        if fn == "snapshot_slice":
+            assert 0 <= a["length"] <= 8
+            if self.scan_pattern is None:
+                return self._res(req, fn, False, "no_pattern", "No repeating segment behind me.")
+            self.pattern = dict(self.scan_pattern)
+            return self._res(req, fn, True, "captured", length=self.pattern["length"], facing=self.pattern["facing"])
+        if fn == "stamp_pattern":
+            assert 1 <= a["blocks"] <= 64
+            if self.stay:
+                return self._res(req, fn, False, "staying_at_base")
+            if not self.pattern:
+                return self._res(req, fn, False, "no_pattern", "No pattern captured yet.")
+            r = dict(self.stamp_result)
+            if r["stopped_at"] == 1:
+                return self._res(req, fn, False, r["reason"], "blocked", **r)
+            return self._res(req, fn, True, "partial" if r["stopped_at"] else "stamped", **r)
         raise AssertionError(f"unhandled api {fn}")

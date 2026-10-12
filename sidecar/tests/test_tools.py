@@ -14,7 +14,7 @@ def disp(game, **kw):
 
 
 def test_tool_set_is_small_and_well_formed():
-    assert 8 <= len(T.TOOL_SPECS) <= 12
+    assert 8 <= len(T.TOOL_SPECS) <= 14
     for t in T.openai_tools():
         f = t["function"]
         assert re.fullmatch(r"[a-z_]+", f["name"]) and f["description"]
@@ -85,9 +85,11 @@ def test_api_args_match_datapack_signatures():
                        ("store_items", {}), ("organize_chests", {"scope": "base"})]:
         d.call(name, args)
     g2 = FakeGame()
+    g2.scan_pattern = _pattern()
     d2 = disp(g2, resolve_player=lambda n: n)
     for name, args in [("gather", {"resource": "wood"}), ("dig_tunnel", {"blocks": 5}), ("rails", {"action": "repair"}),
-                       ("craft", {"item": "stick"}), ("hunt_player", {"player": "Bob"}), ("raid_here", {})]:
+                       ("craft", {"item": "stick"}), ("hunt_player", {"player": "Bob"}), ("raid_here", {}),
+                       ("snapshot_slice", {}), ("stamp_pattern", {"blocks": 3})]:
         d2.call(name, args)
     seen = {}
     for fn, a in g.api_calls + g2.api_calls:
@@ -209,3 +211,61 @@ def test_organize_no_chests_and_already_sorted():
     r = disp(g).call("organize_chests", {"scope": "ahead"})
     assert r["ok"] and r["reason"] == "already_sorted"
     assert not any(fn == "organize_apply" for fn, _ in g.api_calls)
+
+
+def _pattern(length=2, verified=1, palette=None):
+    import pattern_palette as PP
+    rail = next(c for c, e in PP.CODES.items() if e == ("minecraft:rail", "along"))
+    pow_ = next(c for c, e in PP.CODES.items() if e == ("minecraft:powered_rail", "along"))
+    torch = next(c for c, e in PP.CODES.items() if e == ("minecraft:redstone_wall_torch", "L"))
+    sl = [1] * 5 + [1, 0, 0, 0, 1] + [1, 0, 0, 0, 1] + [1] * 5
+    a, b = list(sl), list(sl)
+    a[PP.cell_index(0, 0)] = rail
+    b[PP.cell_index(0, 0)] = pow_
+    b[PP.cell_index(-1, 1)] = torch
+    return {"facing": 3, "width": 5, "height": 4, "length": length, "verified": verified,
+            "origin": {"x": 0, "y": 64, "z": 0}, "palette": PP.PALETTE_VERSION if palette is None else palette,
+            "cells": [a, b][:length]}
+
+
+def test_snapshot_slice_summarizes_without_model_layout():
+    g = FakeGame()
+    g.scan_pattern = _pattern()
+    r = disp(g).call("snapshot_slice", {})
+    assert r["ok"] and r["pattern"]["length"] == 2 and r["pattern"]["facing"] == "east"
+    assert r["pattern"]["counts"] == {"powered_rail": 1, "rail": 1, "redstone_wall_torch": 1}
+    assert {"slice": 1, "x": -1, "y": 1, "block": "redstone_wall_torch facing left"} in r["pattern"]["features"]
+    assert "2-block segment facing east" in r["message"]
+    # the only arguments that reach the game are req and length
+    assert [set(a) for fn, a in g.api_calls if fn == "snapshot_slice"] == [{"req", "length"}]
+
+
+def test_snapshot_slice_bounds_and_errors():
+    g = FakeGame()
+    d = disp(g)
+    assert d.call("snapshot_slice", {"length": 9})["error"] == "bad_args"
+    assert d.call("snapshot_slice", {"cells": []})["error"] == "bad_args"  # model cannot supply layout
+    assert d.call("snapshot_slice", {})["error"] == "no_pattern"
+    g.scan_pattern = _pattern(palette=123)
+    assert d.call("snapshot_slice", {"length": 2})["error"] == "datapack_error"
+
+
+def test_stamp_pattern_bounds_and_results():
+    g = FakeGame()
+    d = disp(g)
+    assert d.call("stamp_pattern", {"blocks": 0})["error"] == "bad_args"
+    assert d.call("stamp_pattern", {"blocks": 65})["error"] == "bad_args"
+    assert d.call("stamp_pattern", {"blocks": 10})["error"] == "no_pattern"
+    g.scan_pattern = _pattern()
+    d.call("snapshot_slice", {})
+    r = d.call("stamp_pattern", {"blocks": 10})
+    assert r["ok"] and r["placed"] == 12 and r["stopped_at"] == 0 and r["reason"] == "done"
+    g.stamp_result = {"placed": 5, "removed": 1, "stopped_at": 4, "reason": "obstructed", "rotated": 1}
+    r = d.call("stamp_pattern", {"blocks": 10})
+    assert r["ok"] and r["code"] == "partial" and r["stopped_at"] == 4 and r["rotated"] is True
+    assert "Stopped at block 4 (obstructed)" in r["message"]
+    g.stamp_result = {"placed": 0, "removed": 0, "stopped_at": 1, "reason": "unloaded", "rotated": 0}
+    r = d.call("stamp_pattern", {"blocks": 10})
+    assert r["ok"] is False and r["error"] == "unloaded" and r["reason"] == "unloaded"
+    g.stay = 1
+    assert d.call("stamp_pattern", {"blocks": 3})["error"] == "staying_at_base"

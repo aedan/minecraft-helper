@@ -26,6 +26,7 @@ Rules:
 - Modes: protect_follow (follows and defends the owner) and stay_at_base (stays home, no following or protecting). stay_at_base overrides protect_follow.
   "come here"/"follow me" -> set_protect_follow on=true come_now=true. "stay home"/"guard the base" -> set_stay_at_base on=true. "stop" -> stop_work.
 - Work tools only start a job; do not wait for it to finish.
+- To continue an existing rail/torch layout: snapshot_slice, then stamp_pattern. Never design the layout yourself.
 - Every result has ok, error, message, state. If ok=false, fix the arguments once or reply with the reason. Never retry the same call unchanged.
 - End with reply: one short plain sentence, no markdown.
 - Use only the listed tools and arguments."""
