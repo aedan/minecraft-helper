@@ -1,0 +1,17 @@
+[Unit]
+Description=Minecraft helper chat brain
+After=minecraft.service network-online.target
+Wants=minecraft.service
+
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/minecraft/helper-brain
+EnvironmentFile=-/opt/minecraft/helper-brain.env
+ExecStart=/opt/minecraft/helper-brain/venv/bin/python /opt/minecraft/helper-brain/helper_brain.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

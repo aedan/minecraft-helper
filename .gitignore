@@ -16,3 +16,5 @@ minecraft-helper.datapack.zip
 sidecar/helper-brain.env
 sidecar/names.json
 sidecar/venv/
+*.bak
+*.pre_extend
