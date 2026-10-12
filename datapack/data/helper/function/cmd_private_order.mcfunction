@@ -1,0 +1,2 @@
+# Show private-order dialog via inline definition (datapack dialog registry flaky on 26.3 zip).
+dialog show @s {type:"minecraft:confirmation",title:"Private order",pause:0b,body:{type:"minecraft:plain_message",contents:"Type an order (include Tom, …). /msg is NOT logged — use this or /function helper:w {m:\"Tom, …\"}."},inputs:[{type:"minecraft:text",key:"m",label:"Order",initial:"Tom, ",max_length:256}],yes:{label:"Send",action:{type:"dynamic/run_command",template:"function helper:w {m:\"$(m)\"}"}},no:{label:"Cancel"}}

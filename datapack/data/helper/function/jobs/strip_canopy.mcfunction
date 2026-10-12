@@ -1,0 +1,12 @@
+execute positioned ~ ~1 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~2 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~3 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~4 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~5 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~6 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~7 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~8 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~9 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~10 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~11 ~ run function helper:jobs/strip_leaves_xz
+execute positioned ~ ~12 ~ run function helper:jobs/strip_leaves_xz

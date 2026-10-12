@@ -1,0 +1,29 @@
+{
+  "type": "minecraft:confirmation",
+  "title": "Private order",
+  "external_title": "Tom private (/trigger tom)",
+  "pause": false,
+  "body": {
+    "type": "minecraft:plain_message",
+    "contents": "Type an order (include Tom, \u2026). /msg is NOT logged \u2014 use this form or /function helper:w {m:\"Tom, \u2026\"}."
+  },
+  "inputs": [
+    {
+      "type": "minecraft:text",
+      "key": "m",
+      "label": "Order",
+      "initial": "Tom, ",
+      "max_length": 256
+    }
+  ],
+  "yes": {
+    "label": "Send",
+    "action": {
+      "type": "dynamic/run_command",
+      "template": "function helper:w {m:\"$(m)\"}"
+    }
+  },
+  "no": {
+    "label": "Cancel"
+  }
+}

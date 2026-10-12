@@ -1,0 +1,26 @@
+execute if score #found helper_config matches 1 run return 0
+execute positioned ~0 ~ ~0 run function helper:jobs/probe
+execute positioned ~1 ~ ~0 run function helper:jobs/probe
+execute positioned ~-1 ~ ~0 run function helper:jobs/probe
+execute positioned ~0 ~ ~1 run function helper:jobs/probe
+execute positioned ~0 ~ ~-1 run function helper:jobs/probe
+execute positioned ~2 ~ ~0 run function helper:jobs/probe
+execute positioned ~-2 ~ ~0 run function helper:jobs/probe
+execute positioned ~0 ~ ~2 run function helper:jobs/probe
+execute positioned ~0 ~ ~-2 run function helper:jobs/probe
+execute positioned ~3 ~ ~0 run function helper:jobs/probe
+execute positioned ~-3 ~ ~0 run function helper:jobs/probe
+execute positioned ~0 ~ ~3 run function helper:jobs/probe
+execute positioned ~0 ~ ~-3 run function helper:jobs/probe
+execute positioned ~4 ~ ~1 run function helper:jobs/probe
+execute positioned ~-4 ~ ~1 run function helper:jobs/probe
+execute positioned ~1 ~ ~4 run function helper:jobs/probe
+execute positioned ~1 ~ ~-4 run function helper:jobs/probe
+execute positioned ~5 ~ ~0 run function helper:jobs/probe
+execute positioned ~-5 ~ ~0 run function helper:jobs/probe
+execute positioned ~0 ~ ~5 run function helper:jobs/probe
+execute positioned ~0 ~ ~-5 run function helper:jobs/probe
+execute positioned ~6 ~ ~2 run function helper:jobs/probe
+execute positioned ~-6 ~ ~2 run function helper:jobs/probe
+execute positioned ~2 ~ ~6 run function helper:jobs/probe
+execute positioned ~2 ~ ~-6 run function helper:jobs/probe

@@ -1,0 +1,15 @@
+# Origin is the SW corner of a 2x2 body. Pumpkin may sit on any of the four.
+execute if block ~ ~ ~ minecraft:netherite_block if block ~1 ~ ~ minecraft:netherite_block if block ~ ~ ~1 minecraft:netherite_block if block ~1 ~ ~1 minecraft:netherite_block if block ~ ~1 ~ #helper:golem_heads if block ~ ~2 ~ minecraft:diamond_block run function helper:golem/summon_tier3
+execute if block ~ ~ ~ minecraft:netherite_block if block ~1 ~ ~ minecraft:netherite_block if block ~ ~ ~1 minecraft:netherite_block if block ~1 ~ ~1 minecraft:netherite_block if block ~1 ~1 ~ #helper:golem_heads if block ~1 ~2 ~ minecraft:diamond_block run function helper:golem/summon_tier3
+execute if block ~ ~ ~ minecraft:netherite_block if block ~1 ~ ~ minecraft:netherite_block if block ~ ~ ~1 minecraft:netherite_block if block ~1 ~ ~1 minecraft:netherite_block if block ~ ~1 ~1 #helper:golem_heads if block ~ ~2 ~1 minecraft:diamond_block run function helper:golem/summon_tier3
+execute if block ~ ~ ~ minecraft:netherite_block if block ~1 ~ ~ minecraft:netherite_block if block ~ ~ ~1 minecraft:netherite_block if block ~1 ~ ~1 minecraft:netherite_block if block ~1 ~1 ~1 #helper:golem_heads if block ~1 ~2 ~1 minecraft:diamond_block run function helper:golem/summon_tier3
+
+execute if block ~ ~ ~ minecraft:iron_block if block ~1 ~ ~ minecraft:iron_block if block ~ ~ ~1 minecraft:iron_block if block ~1 ~ ~1 minecraft:iron_block if block ~ ~1 ~ #helper:golem_heads run function helper:golem/summon_tier2
+execute if block ~ ~ ~ minecraft:iron_block if block ~1 ~ ~ minecraft:iron_block if block ~ ~ ~1 minecraft:iron_block if block ~1 ~ ~1 minecraft:iron_block if block ~1 ~1 ~ #helper:golem_heads run function helper:golem/summon_tier2
+execute if block ~ ~ ~ minecraft:iron_block if block ~1 ~ ~ minecraft:iron_block if block ~ ~ ~1 minecraft:iron_block if block ~1 ~ ~1 minecraft:iron_block if block ~ ~1 ~1 #helper:golem_heads run function helper:golem/summon_tier2
+execute if block ~ ~ ~ minecraft:iron_block if block ~1 ~ ~ minecraft:iron_block if block ~ ~ ~1 minecraft:iron_block if block ~1 ~ ~1 minecraft:iron_block if block ~1 ~1 ~1 #helper:golem_heads run function helper:golem/summon_tier2
+
+execute if block ~ ~ ~ minecraft:stone if block ~1 ~ ~ minecraft:stone if block ~ ~ ~1 minecraft:stone if block ~1 ~ ~1 minecraft:stone if block ~ ~1 ~ #helper:golem_heads run function helper:golem/summon_tier1
+execute if block ~ ~ ~ minecraft:stone if block ~1 ~ ~ minecraft:stone if block ~ ~ ~1 minecraft:stone if block ~1 ~ ~1 minecraft:stone if block ~1 ~1 ~ #helper:golem_heads run function helper:golem/summon_tier1
+execute if block ~ ~ ~ minecraft:stone if block ~1 ~ ~ minecraft:stone if block ~ ~ ~1 minecraft:stone if block ~1 ~ ~1 minecraft:stone if block ~ ~1 ~1 #helper:golem_heads run function helper:golem/summon_tier1
+execute if block ~ ~ ~ minecraft:stone if block ~1 ~ ~ minecraft:stone if block ~ ~ ~1 minecraft:stone if block ~1 ~ ~1 minecraft:stone if block ~1 ~1 ~1 #helper:golem_heads run function helper:golem/summon_tier1

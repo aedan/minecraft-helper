@@ -1,0 +1,7 @@
+# Torch for right lane: floor at outer (^+2) if air; else wall torch above rail.
+execute positioned ^2 ^ ^ if block ~ ~ ~ #helper:passable unless block ~ ~-1 ~ #helper:passable run setblock ~ ~ ~ minecraft:redstone_torch
+execute positioned ^1 ^1 ^ if block ~ ~ ~ #helper:passable unless block ~ ~ ~ minecraft:redstone_torch unless block ~ ~ ~ minecraft:redstone_wall_torch if entity @s[y_rotation=-45..45] run setblock ~ ~ ~ minecraft:redstone_wall_torch[facing=west]
+execute positioned ^1 ^1 ^ if block ~ ~ ~ #helper:passable unless block ~ ~ ~ minecraft:redstone_torch unless block ~ ~ ~ minecraft:redstone_wall_torch if entity @s[y_rotation=45..135] run setblock ~ ~ ~ minecraft:redstone_wall_torch[facing=north]
+execute positioned ^1 ^1 ^ if block ~ ~ ~ #helper:passable unless block ~ ~ ~ minecraft:redstone_torch unless block ~ ~ ~ minecraft:redstone_wall_torch if entity @s[y_rotation=135..180] run setblock ~ ~ ~ minecraft:redstone_wall_torch[facing=east]
+execute positioned ^1 ^1 ^ if block ~ ~ ~ #helper:passable unless block ~ ~ ~ minecraft:redstone_torch unless block ~ ~ ~ minecraft:redstone_wall_torch if entity @s[y_rotation=-180..-135] run setblock ~ ~ ~ minecraft:redstone_wall_torch[facing=east]
+execute positioned ^1 ^1 ^ if block ~ ~ ~ #helper:passable unless block ~ ~ ~ minecraft:redstone_torch unless block ~ ~ ~ minecraft:redstone_wall_torch if entity @s[y_rotation=-135..-45] run setblock ~ ~ ~ minecraft:redstone_wall_torch[facing=south]

@@ -1,0 +1,35 @@
+# Probe 8–48 blocks out and down so gather is not stuck in a 6-block bubble.
+execute if score #found helper_config matches 1 run return 0
+execute positioned ~8 ~ ~ run function helper:jobs/probe
+execute positioned ~-8 ~ ~ run function helper:jobs/probe
+execute positioned ~ ~ ~8 run function helper:jobs/probe
+execute positioned ~ ~ ~-8 run function helper:jobs/probe
+execute positioned ~16 ~ ~ run function helper:jobs/probe
+execute positioned ~-16 ~ ~ run function helper:jobs/probe
+execute positioned ~ ~ ~16 run function helper:jobs/probe
+execute positioned ~ ~ ~-16 run function helper:jobs/probe
+execute positioned ~24 ~ ~ run function helper:jobs/probe
+execute positioned ~-24 ~ ~ run function helper:jobs/probe
+execute positioned ~ ~ ~24 run function helper:jobs/probe
+execute positioned ~ ~ ~-24 run function helper:jobs/probe
+execute positioned ~32 ~ ~ run function helper:jobs/probe
+execute positioned ~-32 ~ ~ run function helper:jobs/probe
+execute positioned ~ ~ ~32 run function helper:jobs/probe
+execute positioned ~ ~ ~-32 run function helper:jobs/probe
+execute positioned ~48 ~ ~ run function helper:jobs/probe
+execute positioned ~-48 ~ ~ run function helper:jobs/probe
+execute positioned ~ ~ ~48 run function helper:jobs/probe
+execute positioned ~ ~ ~-48 run function helper:jobs/probe
+execute positioned ~12 ~ ~12 run function helper:jobs/probe
+execute positioned ~-12 ~ ~12 run function helper:jobs/probe
+execute positioned ~12 ~ ~-12 run function helper:jobs/probe
+execute positioned ~-12 ~ ~-12 run function helper:jobs/probe
+execute positioned ~ ~-8 ~ run function helper:jobs/probe
+execute positioned ~ ~-16 ~ run function helper:jobs/probe
+execute positioned ~ ~-24 ~ run function helper:jobs/probe
+execute positioned ~ ~-32 ~ run function helper:jobs/probe
+execute positioned ~ ~-48 ~ run function helper:jobs/probe
+execute positioned ~8 ~-16 ~8 run function helper:jobs/probe
+execute positioned ~-8 ~-16 ~8 run function helper:jobs/probe
+execute positioned ~8 ~-16 ~-8 run function helper:jobs/probe
+execute positioned ~-8 ~-16 ~-8 run function helper:jobs/probe

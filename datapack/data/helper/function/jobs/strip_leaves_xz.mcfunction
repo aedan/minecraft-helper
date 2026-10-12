@@ -1,0 +1,21 @@
+execute if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~1 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-1 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~1 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~-1 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~2 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-2 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~-2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~3 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-3 ~ ~ if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~3 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~ ~ ~-3 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~2 ~ ~2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~2 ~ ~-2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-2 ~ ~2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-2 ~ ~-2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~3 ~ ~2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~-3 ~ ~2 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~2 ~ ~3 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
+execute positioned ~2 ~ ~-3 if block ~ ~ ~ #minecraft:leaves run setblock ~ ~ ~ air destroy
